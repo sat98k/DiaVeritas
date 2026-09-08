@@ -1,4 +1,4 @@
-﻿import sys
+import sys
 from pathlib import Path
 
 # Ensure project root is on path
@@ -10,7 +10,7 @@ from loguru import logger
 
 from src.config import settings
 from src.ingestion.pubmed_fetcher import build_domain_diversified_corpus, LANDMARK_T2D_PMIDS, DOMAIN_QUERIES
-from src.ingestion.corpus_registry import CorpusRegistry
+from src.ingestion.corpus_registry import add_papers
 from src.preprocessing.xml_parser import parse_pmc_xml, parse_pubmed_abstract_xml
 from src.preprocessing.pdf_parser import parse_pdf
 from src.preprocessing.chunker import chunk_paper, save_chunks, load_chunks
@@ -70,10 +70,7 @@ def main(target_papers: int, min_year: int, fresh: bool):
         min_year=min_year,
     )
 
-    registry = CorpusRegistry()
-    for rec in records:
-        registry.register(rec.to_dict())
-    registry.save()
+    add_papers(records)
     logger.info(f"Phase 1 complete: {len(records)} papers recorded in registry.")
 
     # 2. Parse & Chunk
