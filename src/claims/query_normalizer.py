@@ -259,6 +259,27 @@ def query_to_hypothesis(query: str) -> str:
         condition, intervention = m_improve.groups()
         return f"{intervention[0].upper() + intervention[1:]} improves {condition}."
 
+    # Pattern: Does / Do X [causative_verb] Y? (Prioritize common clinical verbs so multi-word subjects like 'drinking more coffee' parse properly)
+    causative_verbs = r"(increase|decrease|reduce|lower|improve|cause|worsen|prevent|elevate|affect|help|lead to|have)"
+    m_cause = re.match(rf"^(does|do)\s+(.+?)\s+{causative_verbs}\s+(.+)$", q_no_q, re.IGNORECASE)
+    if m_cause:
+        aux, subj, verb, rest = m_cause.groups()
+        v = verb.lower()
+        if aux.lower() == "does":
+            if v == "have":
+                v3 = "has"
+            elif v == "lead to":
+                v3 = "leads to"
+            elif v.endswith(("s", "sh", "ch", "x", "z", "o")):
+                v3 = v + "es"
+            elif v.endswith("y") and len(v) > 1 and v[-2] not in "aeiou":
+                v3 = v[:-1] + "ies"
+            else:
+                v3 = v + "s"
+        else:
+            v3 = v
+        return f"{subj[0].upper() + subj[1:]} {v3} {rest}."
+
     # Pattern: Does X [verb] Y? -> X [verbs] Y.
     m = re.match(r"^does\s+(.+?)\s+([a-z]+)\s+(.+)$", q_no_q, re.IGNORECASE)
     if m:
