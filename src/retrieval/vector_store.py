@@ -85,6 +85,23 @@ class VectorStore:
                 f"Mismatch: {len(chunks)} chunks vs {len(embeddings)} embeddings"
             )
 
+        # Ensure IDs are unique to prevent DuplicateIDError
+        seen_ids = set()
+        dedup_chunks = []
+        dedup_indices = []
+        for idx, c in enumerate(chunks):
+            if c.chunk_id not in seen_ids:
+                seen_ids.add(c.chunk_id)
+                dedup_chunks.append(c)
+                dedup_indices.append(idx)
+
+        if len(dedup_chunks) < len(chunks):
+            logger.info(
+                f"Deduplicated {len(chunks) - len(dedup_chunks)} duplicate chunk IDs before adding to ChromaDB."
+            )
+            chunks = dedup_chunks
+            embeddings = embeddings[dedup_indices]
+
         ids = [c.chunk_id for c in chunks]
         documents = [c.text for c in chunks]
         embeddings_list = embeddings.tolist()

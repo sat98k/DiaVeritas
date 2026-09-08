@@ -247,15 +247,19 @@ def load_chunks(input_path: Path) -> List[Chunk]:
         logger.warning(f"Chunk file not found: {input_path}")
         return []
     chunks = []
+    seen_ids = set()
     with open(input_path, "r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if line:
                 try:
-                    chunks.append(Chunk.from_dict(json.loads(line)))
+                    c = Chunk.from_dict(json.loads(line))
+                    if c.chunk_id not in seen_ids:
+                        seen_ids.add(c.chunk_id)
+                        chunks.append(c)
                 except Exception as e:
                     logger.warning(f"Skipping malformed chunk line: {e}")
-    logger.info(f"Loaded {len(chunks)} chunks from {input_path}")
+    logger.info(f"Loaded {len(chunks)} unique chunks from {input_path}")
     return chunks
 
 
