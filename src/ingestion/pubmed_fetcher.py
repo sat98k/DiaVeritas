@@ -122,7 +122,55 @@ LANDMARK_T2D_PMIDS = [
     "19092145",  # Look AHEAD 2008: Cardiovascular effects of intensive lifestyle intervention in T2D
     "32865377",  # EMPEROR-Reduced 2020: Cardiovascular and Renal Outcomes with Empagliflozin in Heart Failure (NEJM)
     "34449188",  # STEP 1 2021: Once-Weekly Semaglutide in Adults with Overweight or Obesity (NEJM)
+    # Landmark nutrition, diet & lifestyle epidemiology
+    "24414842",  # Ding 2014: Caffeinated and decaffeinated coffee consumption and T2D risk meta-analysis (Diabetes Care)
+    "29590460",  # Carlstrom 2018: Coffee consumption and reduced risk of developing T2D meta-analysis (Nutr Rev)
+    "24510893",  # Jiang 2014: Coffee and caffeine intake and incidence of T2D meta-analysis (Eur J Clin Nutr)
+    "29897866",  # Estruch 2018: Primary Prevention of CVD with Mediterranean Diet - PREDIMED (NEJM)
+    "20693348",  # Malik 2010: Sugar-sweetened beverages and risk of metabolic syndrome and T2D (Diabetes Care)
+    "29221645",  # Lean 2018: DiRECT trial - Primary care weight management for remission of T2D (Lancet)
 ]
+
+# Clinical domain queries for multi-pillar balanced corpus building
+DOMAIN_QUERIES: Dict[str, str] = {
+    "nutrition_diet": (
+        '(("type 2 diabetes"[Title/Abstract] OR "T2D"[Title/Abstract] OR "prediabetes"[Title/Abstract]) '
+        'AND ("coffee"[Title/Abstract] OR "caffeine"[Title/Abstract] OR "diet"[Title/Abstract] '
+        'OR "sugar"[Title/Abstract] OR "beverage"[Title/Abstract] OR "carbohydrate"[Title/Abstract] '
+        'OR "mediterranean"[Title/Abstract] OR "fasting"[Title/Abstract] OR "fiber"[Title/Abstract]) '
+        'AND ("meta-analysis"[Title/Abstract] OR "systematic review"[Title/Abstract] '
+        'OR "clinical trial"[Publication Type] OR "cohort"[Title/Abstract] OR "prospective"[Title/Abstract]))'
+    ),
+    "pharmacotherapy": (
+        '(("type 2 diabetes"[Title/Abstract] OR "T2D"[Title/Abstract]) '
+        'AND ("metformin"[Title/Abstract] OR "GLP-1"[Title/Abstract] OR "semaglutide"[Title/Abstract] '
+        'OR "tirzepatide"[Title/Abstract] OR "SGLT2"[Title/Abstract] OR "empagliflozin"[Title/Abstract] '
+        'OR "dapagliflozin"[Title/Abstract] OR "insulin"[Title/Abstract] OR "sulfonylurea"[Title/Abstract]) '
+        'AND ("clinical trial"[Publication Type] OR "randomized"[Title/Abstract] OR "meta-analysis"[Title/Abstract]))'
+    ),
+    "exercise_lifestyle": (
+        '(("type 2 diabetes"[Title/Abstract] OR "T2D"[Title/Abstract] OR "prediabetes"[Title/Abstract]) '
+        'AND ("exercise"[Title/Abstract] OR "physical activity"[Title/Abstract] OR "aerobic"[Title/Abstract] '
+        'OR "resistance training"[Title/Abstract] OR "walking"[Title/Abstract] OR "HIIT"[Title/Abstract] '
+        'OR "sedentary"[Title/Abstract]) '
+        'AND ("trial"[Title/Abstract] OR "randomized"[Title/Abstract] OR "meta-analysis"[Title/Abstract]))'
+    ),
+    "complications_cvd": (
+        '(("type 2 diabetes"[Title/Abstract] OR "T2D"[Title/Abstract]) '
+        'AND ("cardiovascular"[Title/Abstract] OR "heart failure"[Title/Abstract] OR "MACE"[Title/Abstract] '
+        'OR "mortality"[Title/Abstract] OR "chronic kidney disease"[Title/Abstract] '
+        'OR "nephropathy"[Title/Abstract] OR "retinopathy"[Title/Abstract]) '
+        'AND ("clinical trial"[Publication Type] OR "randomized"[Title/Abstract] OR "meta-analysis"[Title/Abstract]))'
+    ),
+    "prediabetes_remission": (
+        '(("prediabetes"[Title/Abstract] OR "impaired glucose tolerance"[Title/Abstract] '
+        'OR "diabetes remission"[Title/Abstract] OR "prevention of diabetes"[Title/Abstract]) '
+        'AND ("lifestyle"[Title/Abstract] OR "metformin"[Title/Abstract] OR "weight loss"[Title/Abstract] '
+        'OR "remission"[Title/Abstract]) '
+        'AND ("trial"[Title/Abstract] OR "randomized"[Title/Abstract] OR "meta-analysis"[Title/Abstract] OR "cohort"[Title/Abstract]))'
+    ),
+}
+
 
 
 def search_pubmed(
@@ -297,6 +345,60 @@ def download_pubmed_abstract_xml(record: PaperRecord, output_dir: Path) -> bool:
 # Batch corpus download
 # ---------------------------------------------------------------------------
 
+def build_domain_diversified_corpus(
+    total_papers: int = 2000,
+    raw_dir: Optional[Path] = None,
+    min_year: int = 2000,
+) -> List[PaperRecord]:
+    """
+    Download a balanced multi-pillar corpus partitioned across clinical domains:
+    1. Nutrition & Dietary Epidemiology (caffeine, coffee, sugar, Mediterranean, fiber)
+    2. Pharmacotherapy (Metformin, GLP-1, SGLT2i, tirzepatide, semaglutide, insulin)
+    3. Exercise & Lifestyle (aerobic, resistance, walking, HIIT, sedentary)
+    4. Complications & Cardiovascular/Renal (MACE, CKD, heart failure, retinopathy)
+    5. Prediabetes & Remission (prevention, weight loss, remission)
+    """
+    raw_dir = raw_dir or settings.raw_dir
+    raw_dir = Path(raw_dir)
+
+    num_domains = len(DOMAIN_QUERIES)
+    papers_per_domain = max(25, total_papers // num_domains)
+
+    collected_pmids: List[str] = list(LANDMARK_T2D_PMIDS)
+
+    for domain_name, query_str in DOMAIN_QUERIES.items():
+        logger.info(f"Searching domain: {domain_name} (target={papers_per_domain})")
+        try:
+            domain_pmids = search_pubmed(
+                query=query_str,
+                max_results=papers_per_domain,
+                min_year=min_year,
+                sort="relevance",
+            )
+            for pmid in domain_pmids:
+                if pmid not in collected_pmids:
+                    collected_pmids.append(pmid)
+        except Exception as e:
+            logger.warning(f"Failed searching domain {domain_name}: {e}")
+
+    final_pmids = collected_pmids[:total_papers]
+    logger.info(
+        f"Diversified corpus plan: {len(final_pmids)} total PMIDs "
+        f"({len(LANDMARK_T2D_PMIDS)} landmarks + {len(final_pmids) - len(LANDMARK_T2D_PMIDS)} across {num_domains} clinical domains)"
+    )
+
+    records = fetch_pubmed_metadata(final_pmids)
+
+    for rec in records:
+        if rec.pmc_id:
+            success = download_pmc_xml(rec, raw_dir)
+            if success:
+                continue
+        download_pubmed_abstract_xml(rec, raw_dir)
+
+    return records
+
+
 def build_corpus(
     query: str = DEFAULT_T2D_QUERY,
     max_papers: int = 50,
@@ -304,25 +406,22 @@ def build_corpus(
     min_year: int = 2010,
 ) -> List[PaperRecord]:
     """
-    Full corpus download pipeline:
-      1. Search PubMed
-      2. Fetch metadata
-      3. Download PMC XML where available
-      4. Fall back to PubMed abstract XML
-
-    Args:
-        query: PubMed search query.
-        max_papers: Maximum papers to download.
-        raw_dir: Directory to save raw XML files (defaults to settings.raw_dir).
-        min_year: Minimum publication year filter.
-
-    Returns:
-        List of PaperRecord objects with local file paths populated.
+    Full corpus download pipeline.
+    If max_papers >= 100 and default query is used, automatically balances
+    across clinical domains (nutrition, pharmacotherapy, exercise, CVD, prediabetes).
     """
+    if query == DEFAULT_T2D_QUERY and max_papers >= 100:
+        return build_domain_diversified_corpus(
+            total_papers=max_papers,
+            raw_dir=raw_dir,
+            min_year=min_year,
+        )
+
     raw_dir = raw_dir or settings.raw_dir
     raw_dir = Path(raw_dir)
 
     pmids = search_pubmed(query=query, max_results=max_papers, min_year=min_year, sort="relevance")
+
 
     # Guarantee landmark foundational clinical trials are included
     combined_pmids = list(LANDMARK_T2D_PMIDS)
