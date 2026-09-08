@@ -220,15 +220,31 @@ def fetch_pubmed_metadata(pmids: List[str]) -> List[PaperRecord]:
     _configure_entrez()
     records: List[PaperRecord] = []
 
-    # Batch in chunks of 20 to be respectful of rate limits
     batch_size = 20
     for i in range(0, len(pmids), batch_size):
         batch = pmids[i : i + batch_size]
-        logger.info(f"Fetching metadata for PMIDs {i+1}–{i+len(batch)}")
+        logger.info(f"Fetching metadata for PMIDs {i+1}–{i+len(batch)} of {len(pmids)}")
 
-        handle = Entrez.efetch(db="pubmed", id=",".join(batch), rettype="medline", retmode="text")
-        medline_records = list(Medline.parse(handle))
-        handle.close()
+        medline_records = []
+        for attempt in range(3):
+            try:
+                handle = Entrez.efetch(db="pubmed", id=",".join(batch), rettype="medline", retmode="text")
+                medline_records = list(Medline.parse(handle))
+                handle.close()
+                break
+            except Exception as exc:
+                if attempt < 2:
+                    time.sleep(1.5 * (attempt + 1))
+                else:
+                    logger.warning(f"Batch fetch failed for PMIDs {batch[:3]}...: {exc}. Attempting item-by-item.")
+                    for single_pmid in batch:
+                        try:
+                            h = Entrez.efetch(db="pubmed", id=single_pmid, rettype="medline", retmode="text")
+                            medline_records.extend(list(Medline.parse(h)))
+                            h.close()
+                            time.sleep(0.35)
+                        except Exception as item_err:
+                            logger.debug(f"Skipping unretrievable PMID {single_pmid}: {item_err}")
 
         for rec in medline_records:
             pmid = rec.get("PMID", "Unknown")
