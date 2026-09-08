@@ -1,0 +1,328 @@
+/* =============================================================================
+   DiaVeritas — Academic Research Tool CSS
+   
+   Design philosophy: Clean, restrained, professional.
+   No gradients, no neon, no AI gimmicks.
+   Inspired by academic journal interfaces and clinical research dashboards.
+   ============================================================================= */
+
+/* ---------------------------------------------------------------------------
+   Google Fonts
+   --------------------------------------------------------------------------- */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=DM+Serif+Display&display=swap');
+
+/* ---------------------------------------------------------------------------
+   Global reset / base
+   --------------------------------------------------------------------------- */
+*, *::before, *::after {
+    box-sizing: border-box;
+}
+
+/* Streamlit body override */
+.stApp {
+    background-color: #f8f8f6;
+    font-family: 'Inter', sans-serif;
+    color: #1a1a1a;
+}
+
+/* ---------------------------------------------------------------------------
+   Header
+   --------------------------------------------------------------------------- */
+.dv-header {
+    padding: 2.5rem 0 1.5rem 0;
+    border-bottom: 2px solid #1a1a1a;
+    margin-bottom: 1.5rem;
+}
+
+.dv-wordmark {
+    font-family: 'DM Serif Display', serif;
+    font-size: 2.8rem;
+    font-weight: 400;
+    color: #1a1a1a;
+    letter-spacing: -0.02em;
+    line-height: 1;
+    margin-bottom: 0.4rem;
+}
+
+.dv-tagline {
+    font-size: 1rem;
+    color: #555;
+    font-weight: 400;
+    letter-spacing: 0.01em;
+    margin-bottom: 0.5rem;
+}
+
+.dv-disclaimer {
+    font-size: 0.75rem;
+    color: #888;
+    font-style: italic;
+    border-left: 3px solid #d4a853;
+    padding-left: 0.6rem;
+    display: inline-block;
+}
+
+/* ---------------------------------------------------------------------------
+   Status badges
+   --------------------------------------------------------------------------- */
+.status-badge {
+    display: inline-block;
+    padding: 0.6rem 1.2rem;
+    font-size: 0.85rem;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    border-radius: 2px;
+    margin-bottom: 0.5rem;
+}
+
+.status-supported {
+    background-color: #f0f7f0;
+    color: #2d6a2d;
+    border: 1.5px solid #2d6a2d;
+}
+
+.status-refuted {
+    background-color: #fdf0f0;
+    color: #8b2020;
+    border: 1.5px solid #8b2020;
+}
+
+.status-inconclusive {
+    background-color: #fdf8f0;
+    color: #8b6020;
+    border: 1.5px solid #8b6020;
+}
+
+/* ---------------------------------------------------------------------------
+   Confidence box
+   --------------------------------------------------------------------------- */
+.confidence-box {
+    padding: 0.8rem 1rem;
+    background: #fff;
+    border: 1px solid #ddd;
+    border-radius: 2px;
+}
+
+.conf-label {
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: #888;
+    margin-bottom: 0.2rem;
+}
+
+.conf-value {
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: #1a1a1a;
+}
+
+.conf-note {
+    font-size: 0.65rem;
+    color: #999;
+    font-style: italic;
+    margin-top: 0.2rem;
+}
+
+/* ---------------------------------------------------------------------------
+   Evidence counts
+   --------------------------------------------------------------------------- */
+.evidence-counts {
+    font-size: 0.8rem;
+    line-height: 1.8;
+    padding: 0.6rem 0;
+}
+
+.ev-sup { color: #2d6a2d; font-weight: 500; }
+.ev-con { color: #8b2020; font-weight: 500; }
+.ev-ctx { color: #8b6020; font-weight: 500; }
+.ev-neu { color: #555; font-weight: 400; }
+
+/* ---------------------------------------------------------------------------
+   Section labels
+   --------------------------------------------------------------------------- */
+.section-label {
+    font-size: 0.7rem;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: #888;
+    margin-bottom: 0.8rem;
+    margin-top: 1.2rem;
+    border-bottom: 1px solid #e0e0e0;
+    padding-bottom: 0.3rem;
+}
+
+/* ---------------------------------------------------------------------------
+   Processing steps
+   --------------------------------------------------------------------------- */
+.step-done {
+    font-size: 0.75rem;
+    color: #2d6a2d;
+    text-align: center;
+    padding: 0.3rem;
+}
+
+.step-active {
+    font-size: 0.75rem;
+    color: #1a1a1a;
+    font-weight: 600;
+    text-align: center;
+    padding: 0.3rem;
+    animation: pulse 1s ease-in-out infinite;
+}
+
+.step-pending {
+    font-size: 0.75rem;
+    color: #bbb;
+    text-align: center;
+    padding: 0.3rem;
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+
+/* ---------------------------------------------------------------------------
+   Debug view header
+   --------------------------------------------------------------------------- */
+.debug-header {
+    font-size: 0.75rem;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: #1a1a1a;
+    background: #f0f0ee;
+    border-left: 3px solid #1a1a1a;
+    padding: 0.6rem 1rem;
+    margin-bottom: 1rem;
+}
+
+/* ---------------------------------------------------------------------------
+   Empty state
+   --------------------------------------------------------------------------- */
+.empty-state {
+    text-align: center;
+    padding: 4rem 2rem;
+    color: #888;
+    border: 1px dashed #ccc;
+    border-radius: 2px;
+    background: #fff;
+    margin-top: 2rem;
+}
+
+/* ---------------------------------------------------------------------------
+   Streamlit component overrides
+   --------------------------------------------------------------------------- */
+
+/* Remove default Streamlit padding on main block */
+.block-container {
+    padding-top: 1rem !important;
+    max-width: 1100px !important;
+}
+
+/* Text area styling */
+.stTextArea textarea {
+    font-family: 'Inter', sans-serif;
+    font-size: 0.95rem;
+    border: 1.5px solid #ccc;
+    border-radius: 2px;
+    background: #fff;
+    padding: 0.8rem;
+    transition: border-color 0.15s;
+}
+
+.stTextArea textarea:focus {
+    border-color: #1a1a1a;
+    outline: none;
+    box-shadow: none;
+}
+
+/* Primary button */
+.stButton button[kind="primary"] {
+    background: #1a1a1a;
+    color: #fff;
+    border: none;
+    border-radius: 2px;
+    font-family: 'Inter', sans-serif;
+    font-size: 0.85rem;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+    padding: 0.6rem 1.2rem;
+    transition: background 0.15s;
+}
+
+.stButton button[kind="primary"]:hover {
+    background: #333;
+}
+
+/* Secondary button */
+.stButton button[kind="secondary"] {
+    background: #fff;
+    color: #1a1a1a;
+    border: 1.5px solid #ccc;
+    border-radius: 2px;
+    font-family: 'Inter', sans-serif;
+    font-size: 0.85rem;
+}
+
+/* Expander */
+.streamlit-expanderHeader {
+    font-family: 'Inter', sans-serif;
+    font-size: 0.85rem;
+    font-weight: 500;
+    color: #1a1a1a;
+    background: #f8f8f6;
+    border: none;
+    border-bottom: 1px solid #e8e8e8;
+}
+
+/* Metrics */
+.metric-container [data-testid="stMetricValue"] {
+    font-family: 'Inter', sans-serif;
+    font-size: 1.4rem;
+    font-weight: 600;
+}
+
+/* Tabs */
+.stTabs [data-baseweb="tab"] {
+    font-family: 'Inter', sans-serif;
+    font-size: 0.8rem;
+    font-weight: 500;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+/* Info boxes */
+.stAlert {
+    border-radius: 2px;
+    font-family: 'Inter', sans-serif;
+    font-size: 0.85rem;
+}
+
+/* Divider */
+hr {
+    border: none;
+    border-top: 1px solid #e0e0e0;
+    margin: 1rem 0;
+}
+
+/* Blockquote for evidence passages */
+blockquote {
+    border-left: 3px solid #d4a853;
+    padding-left: 0.8rem;
+    color: #444;
+    font-style: italic;
+    margin: 0.5rem 0;
+}
+
+/* Radio buttons */
+.stRadio [role="radiogroup"] {
+    gap: 1.5rem;
+}
+
+/* Caption */
+.stCaption {
+    color: #999;
+    font-size: 0.75rem;
+}
