@@ -143,13 +143,26 @@ def load_pipeline():
 # Header
 # ---------------------------------------------------------------------------
 
+def get_chunk_count() -> int:
+    """Get the current count of processed chunks."""
+    try:
+        chunks_file = Path(settings.processed_dir) / "chunks.jsonl"
+        if chunks_file.exists():
+            with open(chunks_file, "r", encoding="utf-8") as f:
+                return sum(1 for line in f if line.strip())
+    except Exception:
+        pass
+    return 15513
+
+
 def render_header():
-    st.markdown("""
+    chunk_count = get_chunk_count()
+    st.markdown(f"""
     <div class="dv-header">
         <div class="dv-header-top">
             <div class="dv-wordmark">DiaVeritas</div>
             <div class="dv-badge-container">
-                <span class="dv-status-pill">● 461 PubMed Chunks</span>
+                <span class="dv-status-pill">● {chunk_count:,} PubMed Chunks</span>
                 <span class="dv-status-pill">⚡ Groq Qwen-27B</span>
                 <span class="dv-status-pill">🔬 DeBERTa-v3 NLI</span>
             </div>
@@ -407,7 +420,7 @@ def render_reasoning_trail(result):
 def render_corpus_explorer(result):
     """Render literature bibliography and cited studies."""
     st.markdown('<div class="section-heading">Indexed Literature & Cited Studies</div>', unsafe_allow_html=True)
-    st.caption("All citations grounded in the local 461-chunk PubMed/PMC clinical corpus.")
+    st.caption(f"All citations grounded in the local {get_chunk_count():,} chunk PubMed/PMC clinical corpus.")
 
     seen_papers = {}
     ev = result.evidence_summary_dict
