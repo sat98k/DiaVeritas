@@ -108,8 +108,13 @@ def main(target_papers: int, min_year: int, fresh: bool):
     logger.info(f"Phase 4/4: Building Vector Store (ChromaDB) and Sparse Index (BM25)...")
     embedder = Embedder()
     vector_store = VectorStore(fresh=fresh)
-    vector_store.add_chunks(all_chunks, embedder=embedder)
+    
+    logger.info(f"Embedding {len(all_chunks)} chunks with S-PubMedBert...")
+    texts = [c.text for c in all_chunks]
+    embeddings = embedder.encode(texts)
+    vector_store.add_chunks(all_chunks, embeddings)
 
+    logger.info("Building BM25 index...")
     bm25 = BM25Index()
     bm25.build(all_chunks)
     bm25.save(bm25_out)
