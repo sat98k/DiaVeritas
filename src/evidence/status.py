@@ -137,46 +137,90 @@ def determine_evidence_status(
     # "Contextual differences" are counted as partial contradictions
     # because they represent conflicting claims even if context differs
     effective_contradiction = n_con + (n_ctx * 0.5)
-    entailment_ratio = n_sup / n_total
-    contradiction_ratio = effective_contradiction / n_total
-    contextual_ratio = n_ctx / n_total
+    n_decisive = n_sup + effective_contradiction
+
+    total_entailment_ratio = n_sup / n_total if n_total > 0 else 0.0
+    total_contradiction_ratio = effective_contradiction / n_total if n_total > 0 else 0.0
+    contextual_ratio = n_ctx / n_total if n_total > 0 else 0.0
+
+    # Decisive evidence ratios (evaluated among informative chunks rather than diluted by neutral context)
+    decisive_support_ratio = (n_sup / n_decisive) if n_decisive > 0 else 0.0
+    decisive_contradict_ratio = (effective_contradiction / n_decisive) if n_decisive > 0 else 0.0
+
+    # Ratios reported for downstream display and confidence
+    entailment_ratio = decisive_support_ratio if n_decisive > 0 else total_entailment_ratio
+    contradiction_ratio = decisive_contradict_ratio if n_decisive > 0 else total_contradiction_ratio
 
     # --- Status determination ---
     min_support = settings.supported_min_entailment_ratio
     min_refute = settings.refuted_min_contradiction_ratio
 
-    if entailment_ratio >= min_support and contradiction_ratio < 0.2:
+    # Supported: either clear majority of total evidence OR decisive consensus with minimal conflict
+    is_supported_total = (total_entailment_ratio >= min_support and total_contradiction_ratio < 0.2)
+    is_supported_decisive = (
+        n_decisive >= 2
+        and n_sup >= 2
+        and decisive_support_ratio >= 0.7
+        and effective_contradiction < max(1.0, n_sup * 0.3)
+    )
+
+    # Refuted: either clear majority of total evidence OR decisive consensus with minimal support
+    is_refuted_total = (total_contradiction_ratio >= min_refute and total_entailment_ratio < 0.2)
+    is_refuted_decisive = (
+        n_decisive >= 2
+        and effective_contradiction >= 2
+        and decisive_contradict_ratio >= 0.7
+        and n_sup < max(1.0, effective_contradiction * 0.3)
+    )
+
+    if is_supported_total or is_supported_decisive:
         status = SUPPORTED
-        rationale = (
-            f"{n_sup}/{n_total} evidence pieces support this claim "
-            f"(entailment ratio: {entailment_ratio:.1%}). "
-            f"Contradicting evidence is minimal ({n_con} contradictions, "
-            f"{n_ctx} contextual differences)."
-        )
-    elif contradiction_ratio >= min_refute and entailment_ratio < 0.2:
+        if is_supported_total:
+            rationale = (
+                f"{n_sup}/{n_total} evidence pieces support this claim "
+                f"(entailment ratio: {total_entailment_ratio:.1%}). "
+                f"Contradicting evidence is minimal ({n_con} contradictions, "
+                f"{n_ctx} contextual differences)."
+            )
+        else:
+            rationale = (
+                f"Consensus among decisive evidence: {n_sup}/{int(n_decisive)} informative pieces support this claim "
+                f"({decisive_support_ratio:.1%} agreement across {n_sup} supporting vs {n_con} contradicting). "
+                f"The remaining {n_neu} retrieved items provided neutral or background context."
+            )
+    elif is_refuted_total or is_refuted_decisive:
         status = REFUTED
-        rationale = (
-            f"{n_con}/{n_total} evidence pieces contradict this claim "
-            f"(contradiction ratio: {contradiction_ratio:.1%}). "
-            f"Supporting evidence is minimal ({n_sup} supporting)."
-        )
+        if is_refuted_total:
+            rationale = (
+                f"{n_con}/{n_total} evidence pieces contradict this claim "
+                f"(contradiction ratio: {total_contradiction_ratio:.1%}). "
+                f"Supporting evidence is minimal ({n_sup} supporting)."
+            )
+        else:
+            rationale = (
+                f"Consensus among decisive evidence: {int(effective_contradiction)}/{int(n_decisive)} informative pieces contradict this claim "
+                f"({decisive_contradict_ratio:.1%} contradiction rate). "
+                f"Supporting evidence is minimal ({n_sup} supporting), with {n_neu} neutral items."
+            )
     else:
         status = INCONCLUSIVE
-        parts = []
-        if n_sup > 0:
-            parts.append(f"{n_sup} supporting")
-        if n_con > 0:
-            parts.append(f"{n_con} contradicting")
-        if n_ctx > 0:
-            parts.append(f"{n_ctx} with contextual differences")
-        if n_neu > 0:
-            parts.append(f"{n_neu} neutral")
-        rationale = (
-            f"Evidence is mixed or insufficient: {', '.join(parts)}. "
-            f"The evidence cannot be confidently classified as SUPPORTED or REFUTED. "
-            f"INCONCLUSIVE is a valid finding — it reflects genuine uncertainty "
-            f"in the available evidence, not a system failure."
-        )
+        if n_decisive == 0:
+            rationale = (
+                f"All {n_neu} retrieved evidence pieces provided neutral background context without decisive "
+                f"support or contradiction. The evidence cannot be confidently classified as SUPPORTED or REFUTED."
+            )
+        elif n_sup < 2 and effective_contradiction < 2:
+            rationale = (
+                f"Evidence is insufficient: only {n_sup} supporting and {n_con} contradicting pieces "
+                f"among {n_total} items (minimum 2 decisive items required for consensus). "
+                f"INCONCLUSIVE reflects limited evidence coverage in the corpus, not a system failure."
+            )
+        else:
+            rationale = (
+                f"Evidence is mixed or conflicting: {n_sup} supporting vs {n_con} contradicting "
+                f"({n_ctx} contextual differences, {n_neu} neutral). "
+                f"Literature shows conflicting outcomes; INCONCLUSIVE reflects genuine clinical controversy."
+            )
 
     # --- Prototype confidence indicator ---
     confidence_score = _compute_confidence(
@@ -184,6 +228,7 @@ def determine_evidence_status(
         entailment_ratio=entailment_ratio,
         contradiction_ratio=contradiction_ratio,
         n_total=n_total,
+        n_decisive=int(n_decisive),
         avg_nli_confidence=avg_nli_confidence,
         avg_retrieval_relevance=avg_retrieval_relevance,
     )
@@ -219,8 +264,9 @@ def _compute_confidence(
     entailment_ratio: float,
     contradiction_ratio: float,
     n_total: int,
-    avg_nli_confidence: float,
-    avg_retrieval_relevance: float,
+    n_decisive: int = 0,
+    avg_nli_confidence: float = 0.0,
+    avg_retrieval_relevance: float = 0.0,
 ) -> float:
     """
     Compute a basic prototype system confidence score.
@@ -241,7 +287,7 @@ def _compute_confidence(
         agreement = contradiction_ratio
     else:
         # INCONCLUSIVE: lower confidence by design
-        agreement = max(entailment_ratio, contradiction_ratio) * 0.5
+        agreement = max(entailment_ratio, contradiction_ratio) * 0.5 if n_decisive > 0 else 0.2
 
     # Evidence count factor: scale [1, 20] → [0.5, 1.0]
     count_factor = min(1.0, 0.5 + (n_total / 40))

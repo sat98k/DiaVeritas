@@ -153,6 +153,15 @@ def parse_pmc_xml(xml_path: Path, paper_id: str) -> ParsedPaper:
 
     # ---- Body sections ----
     sections = _extract_body_sections(root)
+    if not sections and abstract and abstract != "Not reported":
+        sections = [
+            SectionBlock(
+                section="Abstract",
+                raw_heading="Abstract",
+                text=clean_text(abstract),
+                order=0,
+            )
+        ]
 
     paper = ParsedPaper(
         paper_id=paper_id,

@@ -186,10 +186,15 @@ class Synthesizer:
             logger.info("[Step 1] Normalizing query...")
             result.normalized_query = normalize_query(question)
             search_query = result.normalized_query["normalized_text"]
+            dense_query = result.normalized_query.get("dense_query", question)
 
             # Step 2: Hybrid retrieval
             logger.info("[Step 2] Hybrid retrieval (dense + BM25 + RRF)...")
-            candidates = self._hybrid.retrieve(search_query)
+            candidates = self._hybrid.retrieve(
+                query=question,
+                dense_query=dense_query,
+                bm25_query=search_query,
+            )
             result.candidates = candidates
 
             # Step 3: Reranking
@@ -210,14 +215,17 @@ class Synthesizer:
             # Extract Chunk objects from reranked results
             chunks = [item["chunk"] for item in reranked]
 
-            # Step 4: Claim extraction
+            # Step 4: Claim extraction (fast heuristic extraction from pre-extracted entities)
             logger.info("[Step 4] Extracting structured claims...")
-            claims = extract_claims(chunks, llm_client=self._llm)
+            claims = extract_claims(chunks, llm_client=None)
             result.claims = claims
 
             # Step 5: NLI
             logger.info("[Step 5] Running biomedical NLI...")
-            query_claim_text = result.normalized_query["normalized_text"]
+            query_claim_text = (
+                result.normalized_query.get("hypothesis_text")
+                or result.normalized_query.get("normalized_text", question)
+            )
             nli_results = classify_evidence_against_query(query_claim_text, claims)
             nli_summary = summarize_nli_results(nli_results)
             result.nli_summary = {
@@ -296,9 +304,14 @@ class Synthesizer:
             # Query normalization
             result.normalized_query = normalize_query(question)
             search_query = result.normalized_query["normalized_text"]
+            dense_query = result.normalized_query.get("dense_query", question)
 
             # Dense + BM25 retrieval
-            candidates = self._hybrid.retrieve(search_query)
+            candidates = self._hybrid.retrieve(
+                query=question,
+                dense_query=dense_query,
+                bm25_query=search_query,
+            )
             result.candidates = candidates
 
             # Rerank

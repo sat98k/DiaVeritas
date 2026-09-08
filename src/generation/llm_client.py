@@ -56,7 +56,7 @@ class LLMClient:
         if self._client is not None:
             return
 
-        if self._provider in ("groq", "openai"):
+        if self._provider in ("groq", "openai", "deepseek"):
             self._load_openai_compatible()
         elif self._provider == "anthropic":
             self._load_anthropic()
@@ -65,7 +65,7 @@ class LLMClient:
         else:
             raise ValueError(
                 f"Unknown LLM provider: '{self._provider}'. "
-                "Set LLM_PROVIDER to: openai | groq | google | anthropic"
+                "Set LLM_PROVIDER to: openai | groq | google | anthropic | deepseek"
             )
 
     def _load_openai_compatible(self):
@@ -84,6 +84,17 @@ class LLMClient:
             self._client = OpenAI(
                 api_key=api_key,
                 base_url="https://api.groq.com/openai/v1",
+            )
+        elif self._provider == "deepseek":
+            api_key = settings.deepseek_api_key
+            if not api_key:
+                raise ValueError(
+                    "DEEPSEEK_API_KEY not set. Add it to your .env file. "
+                    "Get a key at: https://platform.deepseek.com/"
+                )
+            self._client = OpenAI(
+                api_key=api_key,
+                base_url="https://api.deepseek.com",
             )
         else:  # openai
             api_key = settings.openai_api_key
@@ -138,7 +149,7 @@ class LLMClient:
         self._load()
 
         try:
-            if self._provider in ("groq", "openai"):
+            if self._provider in ("groq", "openai", "deepseek"):
                 return self._complete_openai(prompt, system_prompt, max_tokens, temperature)
             elif self._provider == "anthropic":
                 return self._complete_anthropic(prompt, system_prompt, max_tokens, temperature)

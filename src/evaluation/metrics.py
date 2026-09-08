@@ -219,6 +219,13 @@ def evaluate_result(
             ev_summary.get("neutral", [])
         )
     ]
+    if not retrieved_texts:
+        # Fallback for baseline mode or when evidence_summary is not populated
+        items = result.get("reranked", []) or result.get("candidates", [])
+        retrieved_texts = [
+            item.get("text", "") if isinstance(item, dict) else getattr(item, "text", "")
+            for item in items
+        ]
 
     interventions = []
     outcomes = []

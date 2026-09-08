@@ -117,6 +117,8 @@ class HybridRetriever:
     def retrieve(
         self,
         query: str,
+        dense_query: Optional[str] = None,
+        bm25_query: Optional[str] = None,
         dense_candidates: Optional[int] = None,
         bm25_candidates: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
@@ -124,7 +126,9 @@ class HybridRetriever:
         Retrieve candidate evidence chunks using hybrid RRF fusion.
 
         Args:
-            query: User query string (raw or normalized).
+            query: Default user query string (raw or normalized).
+            dense_query: Query string for dense embedding (defaults to query).
+            bm25_query: Query string for lexical BM25 (defaults to query).
             dense_candidates: Number of dense retrieval candidates.
                               Defaults to settings.dense_retrieval_candidates.
             bm25_candidates: Number of BM25 candidates.
@@ -140,9 +144,12 @@ class HybridRetriever:
         n_dense = dense_candidates or settings.dense_retrieval_candidates
         n_bm25 = bm25_candidates or settings.bm25_candidates
 
+        active_dense_query = dense_query or query
+        active_bm25_query = bm25_query or query
+
         # --- Dense retrieval ---
-        logger.info(f"Dense retrieval: query='{query[:60]}...', n={n_dense}")
-        query_vec = self._embedder.encode_query(query)
+        logger.info(f"Dense retrieval: query='{active_dense_query[:60]}...', n={n_dense}")
+        query_vec = self._embedder.encode_query(active_dense_query)
         dense_results = self._vector_store.query(query_vec, n_results=n_dense)
 
         # Tag scores for later transparency
@@ -151,8 +158,8 @@ class HybridRetriever:
             item["bm25_score"] = 0.0
 
         # --- BM25 retrieval ---
-        logger.info(f"BM25 retrieval: n={n_bm25}")
-        bm25_results = self._bm25.query(query, n_results=n_bm25)
+        logger.info(f"BM25 retrieval: query='{active_bm25_query[:60]}...', n={n_bm25}")
+        bm25_results = self._bm25.query(active_bm25_query, n_results=n_bm25)
 
         for item in bm25_results:
             item["bm25_score"] = item.get("score", 0.0)

@@ -43,6 +43,7 @@ from loguru import logger
 
 _nlp = None
 _SCISPACY_AVAILABLE = False
+_MODEL_TRIED = False
 
 
 def _load_model():
@@ -52,10 +53,11 @@ def _load_model():
     Uses en_core_sci_sm (small model, ~100MB).
     Falls back to basic keyword extraction if unavailable.
     """
-    global _nlp, _SCISPACY_AVAILABLE
+    global _nlp, _SCISPACY_AVAILABLE, _MODEL_TRIED
 
-    if _nlp is not None:
+    if _MODEL_TRIED:
         return
+    _MODEL_TRIED = True
 
     try:
         import spacy

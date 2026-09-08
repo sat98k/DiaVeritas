@@ -22,12 +22,13 @@ class Settings(BaseSettings):
     # -------------------------------------------------------------------------
     # LLM
     # -------------------------------------------------------------------------
-    llm_provider: str = Field(default="groq", description="openai | groq | google | anthropic | local")
-    llm_model: str = Field(default="llama-3.3-70b-versatile")
+    llm_provider: str = Field(default="groq", description="openai | groq | google | anthropic | deepseek | local")
+    llm_model: str = Field(default="qwen/qwen3.8-27b")
     openai_api_key: str = Field(default="")
     groq_api_key: str = Field(default="")
     google_api_key: str = Field(default="")
     anthropic_api_key: str = Field(default="")
+    deepseek_api_key: str = Field(default="")
     huggingfacehub_api_token: str = Field(default="")
 
     # -------------------------------------------------------------------------

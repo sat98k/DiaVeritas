@@ -89,29 +89,56 @@ def _configure_entrez() -> None:
 # Designed to retrieve high-quality treatment studies.
 DEFAULT_T2D_QUERY = (
     '(("type 2 diabetes"[Title/Abstract] OR "type II diabetes"[Title/Abstract] '
-    'OR "T2DM"[Title/Abstract] OR "T2D"[Title/Abstract]) '
+    'OR "T2DM"[Title/Abstract] OR "T2D"[Title/Abstract] OR "prediabetes"[Title/Abstract]) '
     'AND ("treatment"[Title/Abstract] OR "therapy"[Title/Abstract] '
     'OR "medication"[Title/Abstract] OR "pharmacotherapy"[Title/Abstract] '
     'OR "metformin"[Title/Abstract] OR "SGLT2"[Title/Abstract] '
     'OR "GLP-1"[Title/Abstract] OR "insulin"[Title/Abstract] '
+    'OR "exercise"[Title/Abstract] OR "physical activity"[Title/Abstract] '
+    'OR "lifestyle"[Title/Abstract] OR "diet"[Title/Abstract] '
     'OR "cardiovascular"[Title/Abstract] OR "HbA1c"[Title/Abstract]) '
     'AND ("clinical trial"[Publication Type] OR "randomized"[Title/Abstract] '
     'OR "systematic review"[Title/Abstract] OR "meta-analysis"[Title/Abstract]))'
 )
 
 
+# Landmark foundational clinical trials that define modern Type 2 Diabetes guidelines
+LANDMARK_T2D_PMIDS = [
+    "11832527",  # DPP 2002: Lifestyle Intervention vs Metformin in Prediabetes (NEJM)
+    "11337921",  # Finnish DPS 2001: Prevention of T2D by lifestyle changes (NEJM)
+    "19875686",  # DPPOS 2009: 10-year follow-up of diabetes incidence (Lancet)
+    "26377189",  # DPPOS 2015: 15-year follow-up of lifestyle vs metformin (Lancet Diabetes)
+    "21098771",  # HART-D 2010: Aerobic and resistance training on HbA1c in T2D (JAMA)
+    "17876020",  # DARE 2007: Aerobic training, resistance training, or both in T2D (Ann Intern Med)
+    "21540559",  # Umpierre 2011: Structured exercise training and HbA1c in T2D meta-analysis (JAMA)
+    "26378442",  # EMPA-REG 2015: Empagliflozin, Cardiovascular Outcomes, and Mortality (NEJM)
+    "31535829",  # DAPA-HF 2019: Dapagliflozin in Patients with Heart Failure (NEJM)
+    "9742977",   # UKPDS 34 1998: Effect of intensive blood-glucose control with metformin (Lancet)
+    "27295427",  # LEADER 2016: Liraglutide and Cardiovascular Outcomes in Type 2 Diabetes (NEJM)
+    "30146932",  # DECLARE-TIMI 58 2019: Dapagliflozin and Cardiovascular Outcomes in T2D (NEJM)
+    "31475794",  # CREDENCE 2019: Canagliflozin and Renal Outcomes in Type 2 Diabetes (NEJM)
+    "34449189",  # SURPASS-2 2021: Tirzepatide versus Semaglutide in Patients with T2D (NEJM)
+    "29677495",  # SUSTAIN-6 2016: Semaglutide and Cardiovascular Outcomes in Patients with T2D (NEJM)
+    "19092145",  # Look AHEAD 2008: Cardiovascular effects of intensive lifestyle intervention in T2D
+    "32865377",  # EMPEROR-Reduced 2020: Cardiovascular and Renal Outcomes with Empagliflozin in Heart Failure (NEJM)
+    "34449188",  # STEP 1 2021: Once-Weekly Semaglutide in Adults with Overweight or Obesity (NEJM)
+]
+
+
 def search_pubmed(
     query: str = DEFAULT_T2D_QUERY,
     max_results: int = 50,
-    min_year: int = 2010,
+    min_year: int = 2000,
+    sort: str = "relevance",
 ) -> List[str]:
     """
-    Search PubMed and return a list of PMIDs.
+    Search PubMed and return a list of PMIDs sorted by relevance.
 
     Args:
         query: Entrez search query string.
         max_results: Maximum number of PMIDs to return.
         min_year: Filter to papers published >= this year.
+        sort: Sort order ("relevance" or "pub_date").
 
     Returns:
         List of PMID strings.
@@ -119,10 +146,10 @@ def search_pubmed(
     _configure_entrez()
     full_query = f"{query} AND {min_year}[PDAT]:3000[PDAT]"
 
-    logger.info(f"Searching PubMed: max={max_results}")
+    logger.info(f"Searching PubMed: max={max_results}, sort={sort}")
     logger.debug(f"Query: {full_query}")
 
-    handle = Entrez.esearch(db="pubmed", term=full_query, retmax=max_results, usehistory="y")
+    handle = Entrez.esearch(db="pubmed", term=full_query, retmax=max_results, sort=sort, usehistory="y")
     record = Entrez.read(handle)
     handle.close()
 
@@ -295,12 +322,18 @@ def build_corpus(
     raw_dir = raw_dir or settings.raw_dir
     raw_dir = Path(raw_dir)
 
-    pmids = search_pubmed(query=query, max_results=max_papers, min_year=min_year)
-    if not pmids:
-        logger.warning("No PMIDs found for query.")
-        return []
+    pmids = search_pubmed(query=query, max_results=max_papers, min_year=min_year, sort="relevance")
 
-    records = fetch_pubmed_metadata(pmids)
+    # Guarantee landmark foundational clinical trials are included
+    combined_pmids = list(LANDMARK_T2D_PMIDS)
+    for p in pmids:
+        if p not in combined_pmids:
+            combined_pmids.append(p)
+
+    final_pmids = combined_pmids[:max_papers]
+    logger.info(f"Final corpus plan: {len(final_pmids)} PMIDs ({len(LANDMARK_T2D_PMIDS)} landmarks + {len(final_pmids) - len(LANDMARK_T2D_PMIDS)} relevance-ranked)")
+
+    records = fetch_pubmed_metadata(final_pmids)
 
     for rec in records:
         # Try PMC full-text first

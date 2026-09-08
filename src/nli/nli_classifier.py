@@ -29,6 +29,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Dict, List, Tuple, Optional, Any
 from dataclasses import dataclass, asdict
 
@@ -107,9 +108,11 @@ def _load_nli_model(model_name: Optional[str] = None):
         from transformers import pipeline as hf_pipeline
         logger.info(f"Loading NLI model: {target}")
         logger.info("(First run may download ~700MB — this may take a few minutes)")
+        import torch
         _nli_pipeline = hf_pipeline(
             "text-classification",
             model=target,
+            dtype=torch.float32,
             top_k=None,  # return all label scores
             device=-1,   # CPU
             truncation=True,
@@ -124,6 +127,90 @@ def _load_nli_model(model_name: Optional[str] = None):
         ) from e
 
     return _nli_pipeline
+
+
+# ---------------------------------------------------------------------------
+# Core NLI function
+# ---------------------------------------------------------------------------
+
+_OUTCOME_CUES = {
+    "result", "conclusion", "effect", "reduc", "increas", "signific",
+    "efficac", "superior", "favor", "improv", "hazard ratio", "lowered",
+    "benefit", "risk", "mortality", "associated", "difference", "demonstrated"
+}
+
+_COMMON_STOPWORDS = {
+    "a", "about", "above", "after", "again", "against", "all", "am", "an", "and",
+    "any", "are", "aren't", "as", "at", "be", "because", "been", "before", "being",
+    "below", "between", "both", "but", "by", "can't", "cannot", "could", "couldn't",
+    "did", "didn't", "do", "does", "doesn't", "doing", "don't", "down", "during",
+    "each", "few", "for", "from", "further", "had", "hadn't", "has", "hasn't",
+    "have", "haven't", "having", "he", "he'd", "he'll", "he's", "her", "here",
+    "here's", "hers", "herself", "him", "himself", "his", "how", "how's", "i",
+    "i'd", "i'll", "i'm", "i've", "if", "in", "into", "is", "isn't", "it", "it's",
+    "its", "itself", "let's", "me", "more", "most", "mustn't", "my", "myself",
+    "no", "nor", "not", "of", "off", "on", "once", "only", "or", "other", "ought",
+    "our", "ours", "ourselves", "out", "over", "own", "same", "shan't", "she",
+    "she'd", "she'll", "she's", "should", "shouldn't", "so", "some", "such",
+    "than", "that", "that's", "the", "their", "theirs", "them", "themselves",
+    "then", "there", "there's", "these", "they", "they'd", "they'll", "they're",
+    "they've", "this", "those", "through", "to", "too", "under", "until", "up",
+    "very", "was", "wasn't", "we", "we'd", "we'll", "we're", "we've", "were",
+    "weren't", "what", "what's", "when", "when's", "where", "where's", "which",
+    "while", "who", "who's", "whom", "why", "why's", "with", "won't", "would",
+    "wouldn't", "you", "you'd", "you'll", "you're", "you've", "your", "yours",
+    "yourself", "yourselves"
+}
+
+
+_DESIGN_PENALTIES = {
+    "primary outcome was", "primary end point was", "primary endpoint was",
+    "randomly assigned", "study design", "were enrolled", "inclusion criteria",
+    "exclusion criteria", "to investigate whether", "to determine whether"
+}
+
+
+def select_salient_premise_sentences(
+    text: str,
+    hypothesis: str,
+    max_candidates: int = 3,
+) -> List[str]:
+    """
+    Select the most salient candidate sentences from an evidence passage against a hypothesis.
+
+    Cross-encoder NLI models (MNLI-trained) operate on sentence-pair attention.
+    Passing a 400-word paragraph causes background demographic and protocol text to dilute
+    attention and wash out decisive clinical findings into NEUTRAL.
+    Scoring individual sentences by lexical overlap and clinical outcome indicators ensures
+    the NLI model evaluates the exact assertions made by the study.
+    """
+    if not text or len(text.strip()) < 20:
+        return [text.strip()] if text and text.strip() else []
+
+    raw_sentences = [
+        s.strip() for s in re.split(r"(?<=[.!?])\s+", text) if len(s.strip()) >= 20
+    ]
+    if not raw_sentences:
+        return [text[:500].strip()]
+    if len(raw_sentences) <= max_candidates:
+        return raw_sentences
+
+    hyp_tokens = set(re.findall(r"\b[a-zA-Z0-9_-]+\b", hypothesis.lower())) - _COMMON_STOPWORDS
+
+    scored: List[Tuple[float, str]] = []
+    total_sents = len(raw_sentences)
+    for idx, s in enumerate(raw_sentences):
+        s_lower = s.lower()
+        s_tokens = set(re.findall(r"\b[a-zA-Z0-9_-]+\b", s_lower))
+        overlap = len(hyp_tokens & s_tokens)
+        cue_bonus = 2.5 if any(cue in s_lower for cue in _OUTCOME_CUES) else 0.0
+        design_penalty = 4.0 if any(dp in s_lower for dp in _DESIGN_PENALTIES) else 0.0
+        pos_bonus = 1.0 if idx >= total_sents // 2 else 0.0
+        score = overlap * 2.0 + cue_bonus + pos_bonus - design_penalty
+        scored.append((score, s))
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return [s for _, s in scored[:max_candidates]]
 
 
 # ---------------------------------------------------------------------------
@@ -150,41 +237,48 @@ def classify_nli(
     """
     pipe = _load_nli_model(model_name)
 
-    # Format as required by text-classification NLI models
-    # Input format: "premise [SEP] hypothesis" — handled by the model's tokenizer
-    # Some models expect the pair as a single string; HF pipeline handles this.
+    candidates = select_salient_premise_sentences(premise, hypothesis, max_candidates=2)
+    if not candidates:
+        candidates = [premise[:500]]
+
+    pairs = [{"text": c[:500], "text_pair": hypothesis[:300]} for c in candidates]
     try:
-        outputs = pipe(
-            {"text": premise[:900], "text_pair": hypothesis[:300]},
-        )
-    except TypeError:
-        # Some pipeline versions need a list
-        outputs = pipe(
-            [{"text": premise[:900], "text_pair": hypothesis[:300]}]
-        )[0]
+        outputs = pipe(pairs, batch_size=len(pairs))
+    except Exception:
+        outputs = [pipe(p) for p in pairs]
 
-    # Parse scores
-    all_scores: Dict[str, float] = {}
-    for item in outputs:
-        label_raw = item["label"].lower()
-        normalized = _LABEL_MAP.get(label_raw, label_raw.upper())
-        all_scores[normalized] = float(item["score"])
+    # If pipeline returned a single item's score list: [{label: ..., score: ...}, ...]
+    if isinstance(outputs, list) and len(outputs) > 0 and isinstance(outputs[0], dict) and "label" in outputs[0]:
+        outputs = [outputs]
 
-    # Ensure all three labels exist
-    for lbl in ("ENTAILMENT", "CONTRADICTION", "NEUTRAL"):
-        all_scores.setdefault(lbl, 0.0)
+    parsed_candidates = []
+    for cand_text, output in zip(candidates, outputs):
+        out_list = output if isinstance(output, list) else [output]
+        scores_by_canonical = {}
+        for item in out_list:
+            canonical = _LABEL_MAP.get(item["label"].lower(), "NEUTRAL")
+            scores_by_canonical[canonical] = float(item["score"])
+        for lbl in ("ENTAILMENT", "CONTRADICTION", "NEUTRAL"):
+            scores_by_canonical.setdefault(lbl, 0.0)
+        top_canonical = max(scores_by_canonical, key=scores_by_canonical.get)
+        parsed_candidates.append({
+            "text": cand_text,
+            "label": top_canonical,
+            "confidence": scores_by_canonical[top_canonical],
+            "scores": scores_by_canonical,
+        })
 
-    # Winner
-    predicted_label = max(all_scores, key=all_scores.get)
-    confidence = all_scores[predicted_label]
+    # Pick candidate with strongest non-neutral signal if >= 0.50
+    decisive = [c for c in parsed_candidates if c["label"] in ("ENTAILMENT", "CONTRADICTION") and c["confidence"] >= 0.50]
+    best = max(decisive, key=lambda x: x["confidence"]) if decisive else max(parsed_candidates, key=lambda x: x["confidence"])
 
     return NLIResult(
         premise_chunk_id=premise_chunk_id,
         hypothesis_text=hypothesis,
-        label=predicted_label,
-        confidence=confidence,
-        all_scores=all_scores,
-        premise_text=premise[:200],
+        label=best["label"],
+        confidence=round(best["confidence"], 4),
+        all_scores={k: round(v, 4) for k, v in best["scores"].items()},
+        premise_text=best["text"][:300],
     )
 
 
@@ -203,13 +297,11 @@ def classify_evidence_against_query(
     The query claim is used as the HYPOTHESIS.
     Each evidence claim is the PREMISE.
 
-    This framing asks: "Does this evidence passage support or contradict
-    the query claim?"
+    Extracts salient premise candidate sentences per chunk and batches inference
+    across all candidates in a single high-throughput forward pass.
 
     Args:
-        query_claim_text: A string representing the core query claim
-                          (e.g., from query_normalizer's normalized_text
-                          or a structured summary of what the user is asking).
+        query_claim_text: A string representing the core query claim.
         evidence_claims: List of StructuredClaim objects from claim_extractor.
         model_name: Override NLI model.
 
@@ -219,25 +311,84 @@ def classify_evidence_against_query(
     logger.info(
         f"Running NLI: {len(evidence_claims)} evidence claims vs query hypothesis."
     )
+    if not evidence_claims:
+        return []
 
-    results: List[NLIResult] = []
+    pipe = _load_nli_model(model_name)
+
+    # Prepare candidate sentences per chunk (top 3 salient sentences)
+    claim_candidate_map: List[Tuple[str, List[str]]] = []
+    flat_inputs = []
+
     for claim in evidence_claims:
-        # Use the structured claim string as premise
-        premise_text = claim.to_claim_string()
-        if len(premise_text) < 10:
-            # Fallback to raw text if claim string is too short
-            premise_text = claim.raw_text[:600]
+        candidates = select_salient_premise_sentences(
+            claim.raw_text, query_claim_text, max_candidates=3
+        )
+        if not candidates:
+            fallback = claim.to_claim_string() if len(claim.to_claim_string()) >= 10 else claim.raw_text[:500]
+            candidates = [fallback]
+        claim_candidate_map.append((claim.chunk_id, candidates))
+        for cand in candidates:
+            flat_inputs.append({"text": cand[:500], "text_pair": query_claim_text[:300]})
 
-        result = classify_nli(
-            premise=premise_text,
-            hypothesis=query_claim_text,
-            premise_chunk_id=claim.chunk_id,
-            model_name=model_name,
+    batch_outputs = pipe(flat_inputs, batch_size=len(flat_inputs))
+    if isinstance(batch_outputs, list) and len(batch_outputs) > 0 and isinstance(batch_outputs[0], dict) and "label" in batch_outputs[0]:
+        batch_outputs = [batch_outputs]
+
+    # Reconstruct results per chunk
+    out_idx = 0
+    results: List[NLIResult] = []
+
+    for chunk_id, candidates in claim_candidate_map:
+        chunk_cand_results = []
+        for cand in candidates:
+            output = batch_outputs[out_idx]
+            out_idx += 1
+            out_list = output if isinstance(output, list) else [output]
+            scores_by_canonical = {}
+            for item in out_list:
+                canonical = _LABEL_MAP.get(item["label"].lower(), "NEUTRAL")
+                scores_by_canonical[canonical] = float(item["score"])
+            for lbl in ("ENTAILMENT", "CONTRADICTION", "NEUTRAL"):
+                scores_by_canonical.setdefault(lbl, 0.0)
+            top_canonical = max(scores_by_canonical, key=scores_by_canonical.get)
+            chunk_cand_results.append({
+                "text": cand,
+                "label": top_canonical,
+                "confidence": scores_by_canonical[top_canonical],
+                "scores": scores_by_canonical,
+            })
+
+        # Prefer non-neutral candidate when there is meaningful directional evidence
+        decisive = []
+        for c in chunk_cand_results:
+            ent = c["scores"].get("ENTAILMENT", 0.0)
+            con = c["scores"].get("CONTRADICTION", 0.0)
+            if c["label"] in ("ENTAILMENT", "CONTRADICTION") and c["confidence"] >= 0.40:
+                decisive.append(c)
+            elif ent >= 0.35 and ent > 2.0 * con:
+                c_adjusted = dict(c)
+                c_adjusted["label"] = "ENTAILMENT"
+                c_adjusted["confidence"] = ent
+                decisive.append(c_adjusted)
+            elif con >= 0.35 and con > 2.0 * ent:
+                c_adjusted = dict(c)
+                c_adjusted["label"] = "CONTRADICTION"
+                c_adjusted["confidence"] = con
+                decisive.append(c_adjusted)
+
+        best = max(decisive, key=lambda x: x["confidence"]) if decisive else max(chunk_cand_results, key=lambda x: x["confidence"])
+
+        res = NLIResult(
+            premise_chunk_id=chunk_id,
+            hypothesis_text=query_claim_text,
+            label=best["label"],
+            confidence=round(best["confidence"], 4),
+            all_scores={k: round(v, 4) for k, v in best["scores"].items()},
+            premise_text=best["text"][:300],
         )
-        results.append(result)
-        logger.debug(
-            f"NLI [{claim.chunk_id}]: {result.label} ({result.confidence:.3f})"
-        )
+        results.append(res)
+        logger.debug(f"NLI [{chunk_id}]: {res.label} ({res.confidence:.3f}) - '{res.premise_text[:80]}...'")
 
     return results
 

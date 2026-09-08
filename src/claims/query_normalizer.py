@@ -69,6 +69,52 @@ _OUTCOME_NORMALIZATIONS = {
     "safety": "safety/adverse events",
     "side effect": "safety/adverse events",
     "adverse event": "safety/adverse events",
+    "improve": "clinical improvement",
+    "improvement": "clinical improvement",
+    "better": "clinical improvement",
+    "worsen": "disease progression",
+    "progression": "disease progression",
+    "remission": "disease remission",
+    "control": "glycemic control (HbA1c/glucose)",
+    "glycemic control": "glycemic control (HbA1c/glucose)",
+}
+
+_LIFESTYLE_KEYWORDS = {
+    "exercise": "exercise/physical activity",
+    "exercising": "exercise/physical activity",
+    "exercises": "exercise/physical activity",
+    "physical activity": "exercise/physical activity",
+    "physically active": "exercise/physical activity",
+    "walking": "exercise/physical activity",
+    "walk": "exercise/physical activity",
+    "aerobic": "aerobic exercise",
+    "resistance training": "resistance training",
+    "strength training": "resistance training",
+    "yoga": "yoga",
+    "diet": "dietary intervention",
+    "dietary": "dietary intervention",
+    "dieting": "dietary intervention",
+    "nutrition": "dietary intervention",
+    "fasting": "fasting/intermittent fasting",
+    "intermittent fasting": "fasting/intermittent fasting",
+    "lifestyle": "lifestyle intervention",
+    "lifestyle modification": "lifestyle intervention",
+    "weight loss program": "weight management",
+    "weight loss": "weight management",
+    "bariatric surgery": "bariatric surgery",
+    "meditation": "stress management",
+    "sleep": "sleep intervention",
+    "smoking cessation": "smoking cessation",
+}
+
+_STOPWORDS = {
+    "does", "do", "is", "are", "was", "were", "can", "could", "should",
+    "would", "will", "the", "a", "an", "in", "on", "for", "with", "of",
+    "to", "and", "or", "by", "from", "at", "as", "it", "its", "this",
+    "that", "these", "those", "be", "been", "being", "have", "has", "had",
+    "not", "no", "than", "more", "less", "most", "like", "very", "also",
+    "how", "what", "which", "who", "when", "where", "why", "if",
+    "about", "into", "through", "between", "after", "before",
 }
 
 _POPULATION_KEYWORDS = {
@@ -118,8 +164,11 @@ def normalize_query(query: str) -> Dict[str, Any]:
     if not diseases and any(kw in query_lower for kw in ["diabetes", "t2d", "t2dm"]):
         diseases = ["Type 2 Diabetes"]
 
-    # Detect interventions (drugs)
+    # Detect interventions (drugs and lifestyle)
     interventions = _keyword_match(query_lower, _DRUG_KEYWORDS)
+    for kw, label in _LIFESTYLE_KEYWORDS.items():
+        if re.search(r"\b" + re.escape(kw) + r"\b", query_lower) and label not in interventions:
+            interventions.append(label)
 
     # Detect biomarkers
     biomarkers = _keyword_match(query_lower, _BIOMARKER_KEYWORDS)
@@ -151,24 +200,19 @@ def normalize_query(query: str) -> Dict[str, Any]:
         if match:
             comparator.append(match.group(2).strip() if match.lastindex >= 2 else match.group(1).strip())
 
-    # Build a search-optimized normalized text
-    # Combines all detected concepts without duplication
-    concept_parts = []
-    concept_parts.extend(interventions)
-    concept_parts.extend(diseases)
-    concept_parts.extend(normalized_outcomes)
-    concept_parts.extend(biomarkers)
-    concept_parts.extend(population)
-    # Deduplicate while preserving order
-    seen = set()
-    unique_parts = []
-    for p in concept_parts:
-        pl = p.lower()
-        if pl not in seen:
-            seen.add(pl)
-            unique_parts.append(p)
+    # Build clean lexical search query directly from user query tokens (no dictionary distortion or artificial term duplication)
+    query_tokens = re.findall(r'[a-zA-Z0-9]+', query_lower)
+    content_tokens = [w for w in query_tokens if w not in _STOPWORDS and len(w) > 1]
 
-    normalized_text = " ".join(unique_parts) if unique_parts else query
+    seen_tokens = set()
+    deduped_tokens = []
+    for t in content_tokens:
+        if t not in seen_tokens:
+            seen_tokens.add(t)
+            deduped_tokens.append(t)
+
+    normalized_text = " ".join(deduped_tokens) if deduped_tokens else query
+    hypothesis_text = query_to_hypothesis(query)
 
     result = {
         "original_query": query,
@@ -179,7 +223,100 @@ def normalize_query(query: str) -> Dict[str, Any]:
         "population": population,
         "comparator": comparator,
         "normalized_text": normalized_text,
+        "dense_query": query,
+        "hypothesis_text": hypothesis_text,
     }
 
     logger.debug(f"Query normalized: {result}")
     return result
+
+
+def query_to_hypothesis(query: str) -> str:
+    """
+    Convert an interrogative clinical query into a declarative hypothesis assertion for NLI.
+
+    Examples:
+        'Does metformin reduce cardiovascular risk in patients with type 2 diabetes?'
+        -> 'Metformin reduces cardiovascular risk in patients with type 2 diabetes.'
+
+        'Is metformin more effective than lifestyle changes for prediabetes?'
+        -> 'Metformin is more effective than lifestyle changes for prediabetes.'
+
+        'Are SGLT2 inhibitors safe for patients with chronic kidney disease and T2D?'
+        -> 'SGLT2 inhibitors are safe for patients with chronic kidney disease and T2D.'
+
+        'Do GLP-1 receptor agonists improve HbA1c in type 2 diabetes patients?'
+        -> 'GLP-1 receptor agonists improve HbA1c in type 2 diabetes patients.'
+    """
+    q = query.strip()
+    q_no_q = q.rstrip("?").strip()
+    # Strip parenthetical examples (e.g., "(like walking)", "(e.g., metformin)")
+    q_no_q = re.sub(r"\s*\([^)]*\)", "", q_no_q).strip()
+
+    # Pattern: Does X improve with Y? -> Y improves X.
+    m_improve = re.match(r"^does\s+(.+?)\s+improve\s+with\s+(.+)$", q_no_q, re.IGNORECASE)
+    if m_improve:
+        condition, intervention = m_improve.groups()
+        return f"{intervention[0].upper() + intervention[1:]} improves {condition}."
+
+    # Pattern: Does X [verb] Y? -> X [verbs] Y.
+    m = re.match(r"^does\s+(.+?)\s+([a-z]+)\s+(.+)$", q_no_q, re.IGNORECASE)
+    if m:
+        subj, verb, rest = m.groups()
+        v = verb.lower()
+        if v == "have":
+            v3 = "has"
+        elif v.endswith(("s", "sh", "ch", "x", "z", "o")):
+            v3 = v + "es"
+        elif v.endswith("y") and len(v) > 1 and v[-2] not in "aeiou":
+            v3 = v[:-1] + "ies"
+        else:
+            v3 = v + "s"
+        return f"{subj[0].upper() + subj[1:]} {v3} {rest}."
+
+    # Pattern: Do X [verb] Y? -> X [verb] Y.
+    m = re.match(r"^do\s+(.+?)\s+([a-z]+)\s+(.+)$", q_no_q, re.IGNORECASE)
+    if m:
+        subj, verb, rest = m.groups()
+        return f"{subj[0].upper() + subj[1:]} {verb.lower()} {rest}."
+
+    # Pattern: Is / Are / Was / Were X effective in [verb]ing Y? -> X [verb] Y.
+    m_eff = re.match(
+        r"^(is|are|was|were)\s+([A-Za-z0-9\-\s]+?)\s+effective\s+in\s+([a-z]+)ing\s+(.+)$",
+        q_no_q,
+        re.IGNORECASE,
+    )
+    if m_eff:
+        copula, subj, verb_stem, rest = m_eff.groups()
+        verb = verb_stem.lower()
+        if verb == "reduc":
+            verb = "reduce"
+        elif verb == "improv":
+            verb = "improve"
+        elif verb == "lower":
+            verb = "lower"
+        elif verb == "prevent":
+            verb = "prevent"
+        elif verb == "increas":
+            verb = "increase"
+        v_final = verb if subj.rstrip().endswith("s") else (verb + "s")
+        return f"{subj[0].upper() + subj[1:]} {v_final} {rest}."
+
+    # Pattern: Is / Are / Was / Were X [adjective/predicate] Y? -> X is/are [adjective/predicate] Y.
+    m = re.match(
+        r"^(is|are|was|were)\s+([A-Za-z0-9\-\s]+?)\s+(more|less|better|superior|inferior|effective|associated|safe|recommended|beneficial|linked|protective|preferred|helpful)\s+(.+)$",
+        q_no_q,
+        re.IGNORECASE,
+    )
+    if m:
+        copula, subj, predicate, rest = m.groups()
+        return f"{subj[0].upper() + subj[1:]} {copula.lower()} {predicate} {rest}."
+
+    # Pattern: Can / Could / Should X [verb] Y? -> X can/could/should [verb] Y.
+    m = re.match(r"^(can|could|should)\s+(.+?)\s+(.+)$", q_no_q, re.IGNORECASE)
+    if m:
+        modal, subj, rest = m.groups()
+        return f"{subj[0].upper() + subj[1:]} {modal.lower()} {rest}."
+
+    # Fallback: capitalize first letter and add period
+    return f"{q_no_q[0].upper() + q_no_q[1:]}."

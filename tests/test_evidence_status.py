@@ -99,6 +99,25 @@ class TestDetermineEvidenceStatus:
         result = determine_evidence_status(summary, avg_nli_confidence=0.8)
         assert result.status == REFUTED
 
+    def test_supported_with_neutral_majority(self):
+        """3 supporting, 0 contradicting, 7 neutral → SUPPORTED (decisive consensus)"""
+        summary = make_summary(n_sup=3, n_con=0, n_ctx=0, n_neu=7)
+        result = determine_evidence_status(summary, avg_nli_confidence=0.85)
+        assert result.status == SUPPORTED
+        assert result.confidence_label in ("High", "Moderate")
+
+    def test_insufficient_decisive_stays_inconclusive(self):
+        """1 supporting, 0 contradicting, 9 neutral → INCONCLUSIVE (insufficient evidence)"""
+        summary = make_summary(n_sup=1, n_con=0, n_ctx=0, n_neu=9)
+        result = determine_evidence_status(summary)
+        assert result.status == INCONCLUSIVE
+
+    def test_refuted_with_neutral_majority(self):
+        """0 supporting, 3 contradicting, 7 neutral → REFUTED (decisive consensus)"""
+        summary = make_summary(n_sup=0, n_con=3, n_ctx=0, n_neu=7)
+        result = determine_evidence_status(summary, avg_nli_confidence=0.85)
+        assert result.status == REFUTED
+
     def test_inconclusive_mixed(self):
         """4 supporting, 4 contradicting → INCONCLUSIVE"""
         summary = make_summary(n_sup=4, n_con=4, n_ctx=0, n_neu=2)

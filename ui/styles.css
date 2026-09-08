@@ -1,201 +1,442 @@
 /* =============================================================================
-   DiaVeritas — Academic Research Tool CSS
-   
-   Design philosophy: Clean, restrained, professional.
-   No gradients, no neon, no AI gimmicks.
-   Inspired by academic journal interfaces and clinical research dashboards.
+   DiaVeritas — Clinical Evidence Analysis & Research Dashboard
+   Clean, modern, high-contrast clinical interface.
    ============================================================================= */
 
-/* ---------------------------------------------------------------------------
-   Google Fonts
-   --------------------------------------------------------------------------- */
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=DM+Serif+Display&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,600;1,6..72,400&display=swap');
 
-/* ---------------------------------------------------------------------------
-   Global reset / base
-   --------------------------------------------------------------------------- */
 *, *::before, *::after {
     box-sizing: border-box;
 }
 
-/* Streamlit body override */
+/* ---------------------------------------------------------------------------
+   Global app styling
+   --------------------------------------------------------------------------- */
 .stApp {
-    background-color: #f8f8f6;
-    font-family: 'Inter', sans-serif;
-    color: #1a1a1a;
+    background-color: #f8fafc;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    color: #0f172a;
+}
+
+.block-container {
+    padding-top: 1.5rem !important;
+    padding-bottom: 3rem !important;
+    max-width: 1150px !important;
 }
 
 /* ---------------------------------------------------------------------------
    Header
    --------------------------------------------------------------------------- */
 .dv-header {
-    padding: 2.5rem 0 1.5rem 0;
-    border-bottom: 2px solid #1a1a1a;
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    padding: 1.5rem 2rem;
     margin-bottom: 1.5rem;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
 }
 
-.dv-wordmark {
-    font-family: 'DM Serif Display', serif;
-    font-size: 2.8rem;
-    font-weight: 400;
-    color: #1a1a1a;
-    letter-spacing: -0.02em;
-    line-height: 1;
+.dv-header-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 1rem;
     margin-bottom: 0.4rem;
 }
 
+.dv-wordmark {
+    font-family: 'Newsreader', serif;
+    font-size: 2.2rem;
+    font-weight: 600;
+    color: #0f172a;
+    letter-spacing: -0.02em;
+    line-height: 1;
+}
+
+.dv-badge-container {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}
+
+.dv-status-pill {
+    background: #f1f5f9;
+    color: #475569;
+    border: 1px solid #cbd5e1;
+    border-radius: 9999px;
+    padding: 0.25rem 0.75rem;
+    font-size: 0.75rem;
+    font-weight: 500;
+}
+
 .dv-tagline {
-    font-size: 1rem;
-    color: #555;
+    font-size: 0.95rem;
+    color: #475569;
     font-weight: 400;
-    letter-spacing: 0.01em;
-    margin-bottom: 0.5rem;
+    margin-bottom: 0.6rem;
 }
 
 .dv-disclaimer {
     font-size: 0.75rem;
-    color: #888;
-    font-style: italic;
-    border-left: 3px solid #d4a853;
+    color: #94a3b8;
+    border-left: 2px solid #cbd5e1;
     padding-left: 0.6rem;
-    display: inline-block;
 }
 
 /* ---------------------------------------------------------------------------
-   Status badges
+   Sample Query Buttons & Header
    --------------------------------------------------------------------------- */
-.status-badge {
-    display: inline-block;
-    padding: 0.6rem 1.2rem;
-    font-size: 0.85rem;
+.quick-query-header {
+    font-size: 0.8rem;
     font-weight: 600;
-    letter-spacing: 0.08em;
-    border-radius: 2px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: #64748b;
     margin-bottom: 0.5rem;
 }
 
+/* ---------------------------------------------------------------------------
+   Input area overrides
+   --------------------------------------------------------------------------- */
+.stTextArea label {
+    font-size: 0.85rem !important;
+    font-weight: 600 !important;
+    color: #1e293b !important;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-bottom: 0.4rem !important;
+}
+
+.stTextArea textarea {
+    font-family: 'Inter', sans-serif !important;
+    font-size: 0.95rem !important;
+    color: #0f172a !important;
+    background: #ffffff !important;
+    border: 1.5px solid #cbd5e1 !important;
+    border-radius: 6px !important;
+    padding: 0.75rem 1rem !important;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.02) !important;
+}
+
+.stTextArea textarea:focus {
+    border-color: #2563eb !important;
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1) !important;
+}
+
+/* Buttons */
+.stButton button {
+    border-radius: 6px !important;
+    font-weight: 500 !important;
+    font-size: 0.85rem !important;
+    transition: all 0.15s ease-in-out !important;
+}
+
+.stButton button[kind="primary"] {
+    background-color: #0f172a !important;
+    color: #ffffff !important;
+    border: none !important;
+}
+
+.stButton button[kind="primary"]:hover {
+    background-color: #1e293b !important;
+}
+
+.stButton button[kind="secondary"] {
+    background-color: #ffffff !important;
+    color: #334155 !important;
+    border: 1px solid #cbd5e1 !important;
+}
+
+.stButton button[kind="secondary"]:hover {
+    background-color: #f1f5f9 !important;
+    color: #0f172a !important;
+}
+
+/* ---------------------------------------------------------------------------
+   Verdict and Metric Cards
+   --------------------------------------------------------------------------- */
+.card-verdict {
+    padding: 1.2rem 1.4rem;
+    border-radius: 8px;
+    background: #ffffff;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+    height: 100%;
+}
+
 .status-supported {
-    background-color: #f0f7f0;
-    color: #2d6a2d;
-    border: 1.5px solid #2d6a2d;
+    border: 2px solid #16a34a;
+    background: #f0fdf4;
+}
+
+.status-supported .verdict-title {
+    color: #15803d;
 }
 
 .status-refuted {
-    background-color: #fdf0f0;
-    color: #8b2020;
-    border: 1.5px solid #8b2020;
+    border: 2px solid #dc2626;
+    background: #fef2f2;
+}
+
+.status-refuted .verdict-title {
+    color: #b91c1c;
 }
 
 .status-inconclusive {
-    background-color: #fdf8f0;
-    color: #8b6020;
-    border: 1.5px solid #8b6020;
+    border: 2px solid #d97706;
+    background: #fffbeb;
 }
 
-/* ---------------------------------------------------------------------------
-   Confidence box
-   --------------------------------------------------------------------------- */
-.confidence-box {
-    padding: 0.8rem 1rem;
-    background: #fff;
-    border: 1px solid #ddd;
-    border-radius: 2px;
+.status-inconclusive .verdict-title {
+    color: #b45309;
 }
 
-.conf-label {
+.verdict-label {
     font-size: 0.7rem;
-    text-transform: uppercase;
+    font-weight: 700;
     letter-spacing: 0.08em;
-    color: #888;
+    color: #64748b;
     margin-bottom: 0.2rem;
 }
 
-.conf-value {
-    font-size: 1.1rem;
-    font-weight: 600;
-    color: #1a1a1a;
+.verdict-title {
+    font-size: 1.4rem;
+    font-weight: 700;
+    line-height: 1.2;
+    margin-bottom: 0.2rem;
 }
 
-.conf-note {
-    font-size: 0.65rem;
-    color: #999;
-    font-style: italic;
-    margin-top: 0.2rem;
+.verdict-desc {
+    font-size: 0.78rem;
+    color: #475569;
 }
 
-/* ---------------------------------------------------------------------------
-   Evidence counts
-   --------------------------------------------------------------------------- */
-.evidence-counts {
-    font-size: 0.8rem;
-    line-height: 1.8;
-    padding: 0.6rem 0;
+.card-metric {
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    padding: 1.2rem 1.4rem;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+    height: 100%;
 }
 
-.ev-sup { color: #2d6a2d; font-weight: 500; }
-.ev-con { color: #8b2020; font-weight: 500; }
-.ev-ctx { color: #8b6020; font-weight: 500; }
-.ev-neu { color: #555; font-weight: 400; }
-
-/* ---------------------------------------------------------------------------
-   Section labels
-   --------------------------------------------------------------------------- */
-.section-label {
+.metric-header {
     font-size: 0.7rem;
-    font-weight: 600;
-    letter-spacing: 0.1em;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    color: #64748b;
+    margin-bottom: 0.4rem;
+}
+
+.metric-large-value {
+    font-size: 1.4rem;
+    font-weight: 700;
+    color: #0f172a;
+    line-height: 1.2;
+}
+
+.metric-progress-bar {
+    width: 100%;
+    height: 6px;
+    background: #e2e8f0;
+    border-radius: 999px;
+    margin: 0.5rem 0;
+    overflow: hidden;
+}
+
+.metric-progress-fill {
+    height: 100%;
+    background: #2563eb;
+    border-radius: 999px;
+}
+
+.metric-footer {
+    font-size: 0.72rem;
+    color: #94a3b8;
+}
+
+/* Evidence Breakdown Grid */
+.evidence-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.4rem;
+    margin: 0.4rem 0;
+}
+
+.ev-chip {
+    font-size: 0.75rem;
+    padding: 0.25rem 0.5rem;
+    border-radius: 4px;
+    display: inline-block;
+}
+
+.chip-sup { background: #dcfce7; color: #166534; }
+.chip-con { background: #fee2e2; color: #991b1b; }
+.chip-ctx { background: #fef3c7; color: #92400e; }
+.chip-neu { background: #f1f5f9; color: #475569; }
+
+/* ---------------------------------------------------------------------------
+   Synthesized Answer Box
+   --------------------------------------------------------------------------- */
+.section-heading {
+    font-size: 0.85rem;
+    font-weight: 700;
+    letter-spacing: 0.05em;
     text-transform: uppercase;
-    color: #888;
+    color: #334155;
     margin-bottom: 0.8rem;
-    margin-top: 1.2rem;
-    border-bottom: 1px solid #e0e0e0;
-    padding-bottom: 0.3rem;
+    border-bottom: 2px solid #e2e8f0;
+    padding-bottom: 0.4rem;
+}
+
+.synthesis-box {
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-left: 4px solid #2563eb;
+    border-radius: 6px;
+    padding: 1.5rem 1.8rem;
+    font-size: 0.95rem;
+    line-height: 1.7;
+    color: #1e293b;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+}
+
+.synthesis-box h1, .synthesis-box h2, .synthesis-box h3 {
+    font-size: 1.1rem;
+    color: #0f172a;
+    margin-top: 1rem;
+    margin-bottom: 0.5rem;
 }
 
 /* ---------------------------------------------------------------------------
-   Processing steps
+   Evidence Cards
    --------------------------------------------------------------------------- */
-.step-done {
-    font-size: 0.75rem;
-    color: #2d6a2d;
-    text-align: center;
-    padding: 0.3rem;
+.evidence-card {
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+    padding: 1rem 1.2rem;
+    margin-bottom: 0.8rem;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
 }
 
-.step-active {
-    font-size: 0.75rem;
-    color: #1a1a1a;
+.evidence-card-supporting {
+    border-left: 4px solid #16a34a;
+}
+
+.evidence-card-contradicting {
+    border-left: 4px solid #dc2626;
+}
+
+.evidence-card-contextual {
+    border-left: 4px solid #d97706;
+}
+
+.evidence-header {
+    display: flex;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-bottom: 0.4rem;
+}
+
+.paper-title {
     font-weight: 600;
-    text-align: center;
-    padding: 0.3rem;
-    animation: pulse 1s ease-in-out infinite;
+    color: #0f172a;
+    font-size: 0.92rem;
 }
 
-.step-pending {
-    font-size: 0.75rem;
-    color: #bbb;
-    text-align: center;
-    padding: 0.3rem;
+.paper-meta {
+    font-size: 0.8rem;
+    color: #64748b;
 }
 
-@keyframes pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.5; }
+.evidence-tags {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    margin-bottom: 0.6rem;
+}
+
+.tag-pill {
+    background: #f1f5f9;
+    color: #475569;
+    padding: 0.15rem 0.5rem;
+    border-radius: 4px;
+    font-size: 0.72rem;
+}
+
+.tag-nli {
+    background: #e0f2fe;
+    color: #0369a1;
+}
+
+.evidence-quote {
+    font-size: 0.88rem;
+    font-style: italic;
+    color: #334155;
+    background: #f8fafc;
+    border-left: 3px solid #cbd5e1;
+    padding: 0.5rem 0.8rem;
+    border-radius: 2px;
 }
 
 /* ---------------------------------------------------------------------------
-   Debug view header
+   Sources / Corpus Cards
    --------------------------------------------------------------------------- */
-.debug-header {
-    font-size: 0.75rem;
+.source-card {
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+    padding: 1rem 1.2rem;
+    margin-bottom: 0.8rem;
+}
+
+.source-title {
     font-weight: 600;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-    color: #1a1a1a;
-    background: #f0f0ee;
-    border-left: 3px solid #1a1a1a;
-    padding: 0.6rem 1rem;
-    margin-bottom: 1rem;
+    color: #0f172a;
+    font-size: 0.92rem;
+    margin-bottom: 0.2rem;
+}
+
+.source-meta {
+    font-size: 0.82rem;
+    color: #475569;
+    margin-bottom: 0.4rem;
+}
+
+.source-badges {
+    display: flex;
+    gap: 0.4rem;
+}
+
+.source-badge {
+    font-size: 0.72rem;
+    background: #f1f5f9;
+    color: #64748b;
+    padding: 0.15rem 0.4rem;
+    border-radius: 4px;
+    border: 1px solid #e2e8f0;
+}
+
+/* ---------------------------------------------------------------------------
+   Tabs styling
+   --------------------------------------------------------------------------- */
+.stTabs [data-baseweb="tab-list"] {
+    gap: 1.5rem;
+    border-bottom: 2px solid #e2e8f0;
+}
+
+.stTabs [data-baseweb="tab"] {
+    font-family: 'Inter', sans-serif;
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: #64748b;
+    padding-bottom: 0.8rem;
+}
+
+.stTabs [aria-selected="true"] {
+    color: #2563eb !important;
 }
 
 /* ---------------------------------------------------------------------------
@@ -203,126 +444,46 @@
    --------------------------------------------------------------------------- */
 .empty-state {
     text-align: center;
-    padding: 4rem 2rem;
-    color: #888;
-    border: 1px dashed #ccc;
-    border-radius: 2px;
-    background: #fff;
-    margin-top: 2rem;
+    padding: 3.5rem 2rem;
+    background: #ffffff;
+    border: 1.5px dashed #cbd5e1;
+    border-radius: 8px;
+    margin-top: 1.5rem;
 }
 
 /* ---------------------------------------------------------------------------
-   Streamlit component overrides
+   Footer
    --------------------------------------------------------------------------- */
-
-/* Remove default Streamlit padding on main block */
-.block-container {
-    padding-top: 1rem !important;
-    max-width: 1100px !important;
+.dv-footer {
+    margin-top: 2.5rem;
+    padding-top: 1rem;
+    border-top: 1px solid #e2e8f0;
+    font-size: 0.75rem;
+    color: #94a3b8;
+    text-align: center;
 }
 
-/* Text area styling */
-.stTextArea textarea {
-    font-family: 'Inter', sans-serif;
-    font-size: 0.95rem;
-    border: 1.5px solid #ccc;
-    border-radius: 2px;
-    background: #fff;
-    padding: 0.8rem;
-    transition: border-color 0.15s;
+.dv-footer code {
+    background: #f1f5f9;
+    padding: 0.1rem 0.3rem;
+    border-radius: 3px;
+    color: #475569;
 }
 
-.stTextArea textarea:focus {
-    border-color: #1a1a1a;
-    outline: none;
-    box-shadow: none;
-}
-
-/* Primary button */
-.stButton button[kind="primary"] {
-    background: #1a1a1a;
-    color: #fff;
-    border: none;
-    border-radius: 2px;
-    font-family: 'Inter', sans-serif;
-    font-size: 0.85rem;
+/* Pipeline steps */
+.step-done {
+    font-size: 0.75rem;
+    color: #16a34a;
     font-weight: 500;
-    letter-spacing: 0.02em;
-    padding: 0.6rem 1.2rem;
-    transition: background 0.15s;
 }
 
-.stButton button[kind="primary"]:hover {
-    background: #333;
-}
-
-/* Secondary button */
-.stButton button[kind="secondary"] {
-    background: #fff;
-    color: #1a1a1a;
-    border: 1.5px solid #ccc;
-    border-radius: 2px;
-    font-family: 'Inter', sans-serif;
-    font-size: 0.85rem;
-}
-
-/* Expander */
-.streamlit-expanderHeader {
-    font-family: 'Inter', sans-serif;
-    font-size: 0.85rem;
-    font-weight: 500;
-    color: #1a1a1a;
-    background: #f8f8f6;
-    border: none;
-    border-bottom: 1px solid #e8e8e8;
-}
-
-/* Metrics */
-.metric-container [data-testid="stMetricValue"] {
-    font-family: 'Inter', sans-serif;
-    font-size: 1.4rem;
+.step-active {
+    font-size: 0.75rem;
+    color: #2563eb;
     font-weight: 600;
 }
 
-/* Tabs */
-.stTabs [data-baseweb="tab"] {
-    font-family: 'Inter', sans-serif;
-    font-size: 0.8rem;
-    font-weight: 500;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-}
-
-/* Info boxes */
-.stAlert {
-    border-radius: 2px;
-    font-family: 'Inter', sans-serif;
-    font-size: 0.85rem;
-}
-
-/* Divider */
-hr {
-    border: none;
-    border-top: 1px solid #e0e0e0;
-    margin: 1rem 0;
-}
-
-/* Blockquote for evidence passages */
-blockquote {
-    border-left: 3px solid #d4a853;
-    padding-left: 0.8rem;
-    color: #444;
-    font-style: italic;
-    margin: 0.5rem 0;
-}
-
-/* Radio buttons */
-.stRadio [role="radiogroup"] {
-    gap: 1.5rem;
-}
-
-/* Caption */
-.stCaption {
-    color: #999;
+.step-pending {
     font-size: 0.75rem;
+    color: #94a3b8;
 }

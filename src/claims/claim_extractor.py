@@ -260,9 +260,14 @@ def _safe_field(data: dict, key: str) -> str:
 
 
 def _safe_direction(val: str) -> str:
-    valid = {"Reduction", "Increase", "No significant change", "Unclear"}
-    val = str(val).strip().title()
-    return val if val in valid else "Unclear"
+    valid_map = {
+        "reduction": "Reduction",
+        "increase": "Increase",
+        "no significant change": "No significant change",
+        "no significant": "No significant change",
+        "unclear": "Unclear",
+    }
+    return valid_map.get(str(val).strip().lower(), "Unclear")
 
 
 def _fallback_claim(chunk: Chunk) -> StructuredClaim:

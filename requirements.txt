@@ -40,9 +40,9 @@ pymupdf>=1.24.0               # PyMuPDF: fast, reliable PDF text extraction
 # ---------------------------------------------------------------------------
 # Biomedical NLP
 # ---------------------------------------------------------------------------
-spacy>=3.8.0                  # Already installed
-scispacy>=0.5.5               # Biomedical spaCy extensions
-# scispacy model installed separately:
+spacy>=3.8.0
+# scispacy>=0.5.5               # Optional: pins spacy<3.8 (not available on Python 3.14). entity_extractor.py uses built-in domain dictionaries.
+# scispacy model installed separately if scispacy is supported:
 #   py -m pip install https://s3-us-west-2.amazonaws.com/ai2-s2-scispacy/releases/v0.5.5/en_core_sci_sm-0.5.5.tar.gz
 
 # ---------------------------------------------------------------------------

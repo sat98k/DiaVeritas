@@ -79,15 +79,18 @@ class CrossEncoderReranker:
 
         top_k = top_k or settings.reranker_top_k
 
-        # Build query-passage pairs for cross-encoder
-        pairs = [[query, item["text"]] for item in candidates]
+        # Limit cross-encoder candidates to top-25 from RRF for sub-second CPU latency
+        candidates_to_rerank = candidates[:25]
 
-        logger.info(f"Reranking {len(candidates)} candidates with cross-encoder...")
-        scores = self._model.predict(pairs, show_progress_bar=False)
+        # Build query-passage pairs for cross-encoder
+        pairs = [[query, item["text"]] for item in candidates_to_rerank]
+
+        logger.info(f"Reranking {len(candidates_to_rerank)} candidates with cross-encoder...")
+        scores = self._model.predict(pairs, batch_size=32, show_progress_bar=False)
 
         # Attach scores and sort
         reranked = []
-        for item, score in zip(candidates, scores):
+        for item, score in zip(candidates_to_rerank, scores):
             item_copy = item.copy()
             item_copy["reranker_score"] = float(score)
             reranked.append(item_copy)
