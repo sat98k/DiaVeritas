@@ -77,6 +77,14 @@ class ClaimGrouper:
         target_interventions = [i.lower() for i in normalized_query.get("interventions", [])]
         target_outcomes = [o.lower() for o in normalized_query.get("outcomes", [])]
 
+        expanded_interventions = [i.lower() for i in normalized_query.get("expanded_interventions", [])]
+        if not expanded_interventions:
+            expanded_interventions = target_interventions
+
+        expanded_outcomes = [o.lower() for o in normalized_query.get("expanded_outcomes", [])]
+        if not expanded_outcomes:
+            expanded_outcomes = target_outcomes
+
         groups: Dict[str, ClaimGroup] = {}
         on_target_claims: List[StructuredClaim] = []
         neutral_claims: List[Tuple[StructuredClaim, str]] = []
@@ -88,15 +96,15 @@ class ClaimGrouper:
 
             # Check intervention match: if target interventions exist, claim text/int must match at least one
             int_matched = True
-            if target_interventions:
-                int_matched = any(ti in c_text_lower or ti in c_int for ti in target_interventions)
+            if expanded_interventions:
+                int_matched = any(ti in c_text_lower or ti in c_int for ti in expanded_interventions)
 
             # Check outcome match: if target outcomes exist, claim text/out must match at least one
             out_matched = True
-            if target_outcomes:
+            if expanded_outcomes:
                 out_matched = any(
-                    to in c_text_lower or to in c_out or self._outcome_matches(to, c_text_lower)
-                    for to in target_outcomes
+                    to in c_text_lower or to in c_out or self._outcome_matches(to, c_text_lower, c_out)
+                    for to in expanded_outcomes
                 )
 
             # Determine canonical group key
@@ -133,17 +141,13 @@ class ClaimGrouper:
         )
         return on_target_claims, neutral_claims, list(groups.values())
 
-    def _outcome_matches(self, target_outcome: str, text: str) -> bool:
+    def _outcome_matches(self, target_outcome: str, text: str, claim_outcome: str = "") -> bool:
         """Helper to match clinical synonyms for common target outcomes."""
-        synonyms = {
-            "cardiovascular events/risk": ["cardiovascular", "mace", "myocardial", "heart failure", "cv death", "stroke"],
-            "glycemic control (hba1c/glucose)": ["hba1c", "a1c", "blood glucose", "glycemic", "fasting glucose"],
-            "renal outcomes": ["kidney", "renal", "egfr", "albuminuria", "esrd", "nephropathy"],
-            "mortality": ["mortality", "death", "survival", "fatal"],
-            "weight/bmi": ["weight", "bmi", "body mass", "adiposity"],
-        }
-        for category, syn_list in synonyms.items():
-            if target_outcome in category:
-                if any(syn in text for syn in syn_list):
+        from src.claims.query_normalizer import OUTCOME_SYNONYM_CLUSTERS
+        t_low = target_outcome.lower()
+        search_space = f"{text} {claim_outcome}".lower()
+        for cluster, synonyms in OUTCOME_SYNONYM_CLUSTERS.items():
+            if any(syn == t_low or syn in t_low or t_low in syn for syn in synonyms):
+                if any(syn in search_space for syn in synonyms):
                     return True
         return False

@@ -139,6 +139,220 @@ _POPULATION_KEYWORDS = {
 
 
 # ---------------------------------------------------------------------------
+# Biomedical Drug Classes and Members for Query-Time Concept Expansion
+# ---------------------------------------------------------------------------
+
+DRUG_CLASSES: Dict[str, Dict[str, List[str]]] = {
+    "sglt2": {
+        "class_terms": [
+            "sglt2", "sglt-2", "sglt2 inhibitor", "sglt2 inhibitors",
+            "sglt-2 inhibitor", "sglt-2 inhibitors",
+            "sodium-glucose cotransporter-2 inhibitor",
+            "sodium-glucose cotransporter 2 inhibitor",
+            "sodium-glucose cotransporter 2",
+            "sodium glucose cotransporter 2",
+        ],
+        "members": [
+            "empagliflozin", "jardiance",
+            "dapagliflozin", "farxiga", "forxiga",
+            "canagliflozin", "invokana",
+            "ertugliflozin", "steglatro",
+            "sotagliflozin", "ziquenza",
+        ],
+    },
+    "glp1": {
+        "class_terms": [
+            "glp-1", "glp1", "glp-1 receptor agonist", "glp-1 receptor agonists",
+            "glp-1 ra", "glp-1 ras", "glp1-ra", "glp1 ra", "glp1 receptor agonist",
+            "glucagon-like peptide-1 receptor agonist", "glp-1 agonist", "glp-1 agonists",
+            "incretin mimetic", "incretin mimetics",
+        ],
+        "members": [
+            "semaglutide", "ozempic", "wegovy", "rybelsus",
+            "liraglutide", "victoza", "saxenda",
+            "dulaglutide", "trulicity",
+            "tirzepatide", "mounjaro", "zepbound",
+            "exenatide", "byetta", "bydureon",
+            "lixisenatide", "adlyxin",
+            "albiglutide", "tanzeum",
+        ],
+    },
+    "dpp4": {
+        "class_terms": [
+            "dpp-4", "dpp4", "dpp-4 inhibitor", "dpp-4 inhibitors",
+            "dpp4 inhibitor", "dpp4 inhibitors",
+            "dipeptidyl peptidase-4 inhibitor", "dipeptidyl peptidase 4 inhibitor",
+            "gliptin", "gliptins",
+        ],
+        "members": [
+            "sitagliptin", "januvia",
+            "saxagliptin", "onglyza",
+            "linagliptin", "tradjenta",
+            "alogliptin", "nesina",
+            "vildagliptin", "galvus",
+        ],
+    },
+    "sulfonylurea": {
+        "class_terms": [
+            "sulfonylurea", "sulfonylureas", "su",
+        ],
+        "members": [
+            "glimepiride", "amaryl",
+            "glipizide", "glucotrol",
+            "glyburide", "glibenclamide", "diabeta", "micronase",
+            "gliclazide", "diamicron",
+        ],
+    },
+    "tzd": {
+        "class_terms": [
+            "tzd", "tzds", "thiazolidinedione", "thiazolidinediones", "glitazone", "glitazones",
+        ],
+        "members": [
+            "pioglitazone", "actos",
+            "rosiglitazone", "avandia",
+        ],
+    },
+    "biguanide": {
+        "class_terms": [
+            "biguanide", "biguanides",
+        ],
+        "members": [
+            "metformin", "glucophage", "fortamet", "glumetza",
+        ],
+    },
+}
+
+OUTCOME_SYNONYM_CLUSTERS: Dict[str, List[str]] = {
+    "heart_failure": [
+        "heart failure", "hospitalization for heart failure", "hf hospitalization",
+        "hfh", "hhf", "hospital admission for heart failure", "chf", "congestive heart failure",
+        "hospitalization", "heart failure events",
+    ],
+    "cv_events": [
+        "cardiovascular events/risk", "cardiovascular events", "cardiovascular risk",
+        "cardiovascular", "cardiovascular mortality", "mace", "major adverse cardiovascular",
+        "major adverse cardiovascular events", "cardiovascular death", "cv death",
+        "myocardial infarction", "heart attack", "stroke", "cardiovascular outcomes",
+        "cardiovascular disease", "cvd", "coronary heart disease",
+    ],
+    "glycemic_control": [
+        "glycemic control (hba1c/glucose)", "glycemic control", "glycaemic control",
+        "hba1c", "a1c", "blood glucose", "fasting plasma glucose", "fpg",
+        "fasting blood glucose", "hyperglycemia", "blood sugar",
+    ],
+    "renal_outcomes": [
+        "renal outcomes", "kidney disease", "nephropathy", "diabetic kidney disease",
+        "ckd", "chronic kidney disease", "egfr", "estimated glomerular filtration rate",
+        "albuminuria", "microalbuminuria", "macroalbuminuria", "end-stage renal disease", "esrd",
+        "progression of kidney disease", "renal", "kidney",
+    ],
+    "mortality": [
+        "mortality", "all-cause mortality", "death", "overall survival", "fatal outcomes", "survival",
+    ],
+    "weight": [
+        "weight/bmi", "weight loss", "weight reduction", "body weight", "bmi", "body mass index", "adiposity",
+    ],
+    "hypoglycemia": [
+        "hypoglycemia", "hypoglycaemia", "hypoglycemic events", "low blood sugar",
+    ],
+}
+
+DRUG_BRAND_MAP: Dict[str, List[str]] = {
+    "empagliflozin": ["jardiance"],
+    "jardiance": ["empagliflozin"],
+    "dapagliflozin": ["farxiga", "forxiga"],
+    "farxiga": ["dapagliflozin"],
+    "forxiga": ["dapagliflozin"],
+    "canagliflozin": ["invokana"],
+    "invokana": ["canagliflozin"],
+    "ertugliflozin": ["steglatro"],
+    "steglatro": ["ertugliflozin"],
+    "semaglutide": ["ozempic", "wegovy", "rybelsus"],
+    "ozempic": ["semaglutide"],
+    "wegovy": ["semaglutide"],
+    "rybelsus": ["semaglutide"],
+    "liraglutide": ["victoza", "saxenda"],
+    "victoza": ["liraglutide"],
+    "saxenda": ["liraglutide"],
+    "dulaglutide": ["trulicity"],
+    "trulicity": ["dulaglutide"],
+    "tirzepatide": ["mounjaro", "zepbound"],
+    "mounjaro": ["tirzepatide"],
+    "sitagliptin": ["januvia"],
+    "januvia": ["sitagliptin"],
+    "metformin": ["glucophage"],
+    "glucophage": ["metformin"],
+    "pioglitazone": ["actos"],
+    "actos": ["pioglitazone"],
+}
+
+
+def expand_interventions(interventions: List[str], query_text: str = "") -> List[str]:
+    """
+    Expand interventions using class-to-member or member-to-class mappings.
+    - If a drug class is queried (e.g., 'SGLT2 inhibitors'), expands to all member drugs
+      and brand names so member-level trials (e.g. empagliflozin in EMPA-REG) are admitted.
+    - If a specific drug is queried (e.g., 'empagliflozin'), expands to its brand names
+      and class name, but NOT sister drugs (e.g., dapagliflozin).
+    """
+    expanded = set()
+    for item in interventions:
+        expanded.add(item.lower())
+
+    combined_check = (query_text.lower() + " " + " ".join(interventions).lower())
+
+    for class_id, info in DRUG_CLASSES.items():
+        # Check if the class itself is targeted
+        class_hit = any(
+            re.search(r"\b" + re.escape(term) + r"\b", combined_check)
+            for term in info["class_terms"]
+        )
+        if class_hit:
+            for term in info["class_terms"]:
+                expanded.add(term.lower())
+            for member in info["members"]:
+                expanded.add(member.lower())
+            continue
+
+        # Check if a specific member of this class was mentioned
+        for member in info["members"]:
+            if any(re.search(r"\b" + re.escape(member) + r"\b", int_item) for int_item in list(expanded)):
+                for class_term in info["class_terms"][:3]:  # canonical class terms
+                    expanded.add(class_term.lower())
+
+    # Map member generics to brand names and vice versa
+    for drug_name, brands in DRUG_BRAND_MAP.items():
+        if any(re.search(r"\b" + re.escape(drug_name) + r"\b", int_item) for int_item in list(expanded)):
+            expanded.add(drug_name)
+            for b in brands:
+                expanded.add(b)
+
+    return sorted(list(expanded))
+
+
+def expand_outcomes(outcomes: List[str], query_text: str = "") -> List[str]:
+    """
+    Expand outcomes with clinical synonyms and abbreviations.
+    """
+    expanded = set()
+    for item in outcomes:
+        expanded.add(item.lower())
+
+    combined_check = (query_text.lower() + " " + " ".join(outcomes).lower())
+
+    for cluster_id, synonyms in OUTCOME_SYNONYM_CLUSTERS.items():
+        cluster_hit = any(
+            re.search(r"\b" + re.escape(syn) + r"\b", combined_check)
+            for syn in synonyms
+        )
+        if cluster_hit:
+            for syn in synonyms:
+                expanded.add(syn.lower())
+
+    return sorted(list(expanded))
+
+
+# ---------------------------------------------------------------------------
 # Main normalization function
 # ---------------------------------------------------------------------------
 
@@ -154,6 +368,8 @@ def normalize_query(query: str) -> Dict[str, Any]:
     - biomarkers: List[str]    — detected biomarker concepts
     - population: List[str]    — detected population descriptors
     - comparator: List[str]    — detected comparators (always empty without explicit mention)
+    - expanded_interventions: List[str] — class members and drug aliases for concept gating
+    - expanded_outcomes: List[str]      — clinical synonyms for concept gating
     - normalized_text: str     — search-optimized query string for retrieval
     """
     query_lower = query.lower()
@@ -200,7 +416,7 @@ def normalize_query(query: str) -> Dict[str, Any]:
         if match:
             comparator.append(match.group(2).strip() if match.lastindex >= 2 else match.group(1).strip())
 
-    # Build clean lexical search query directly from user query tokens (no dictionary distortion or artificial term duplication)
+    # Build clean lexical search query directly from user query tokens
     query_tokens = re.findall(r'[a-zA-Z0-9]+', query_lower)
     content_tokens = [w for w in query_tokens if w not in _STOPWORDS and len(w) > 1]
 
@@ -211,9 +427,39 @@ def normalize_query(query: str) -> Dict[str, Any]:
             seen_tokens.add(t)
             deduped_tokens.append(t)
 
+    # Append high-value domain expansion terms for BM25 retrieval without over-expanding
+    expansion_terms = []
+    for int_term in interventions:
+        int_low = int_term.lower()
+        if any(k in int_low for k in ["sglt2", "sglt-2", "sglt 2"]):
+            expansion_terms.extend(["empagliflozin", "dapagliflozin", "canagliflozin"])
+        elif any(k in int_low for k in ["glp-1", "glp1", "glp 1"]):
+            expansion_terms.extend(["semaglutide", "liraglutide", "dulaglutide"])
+        elif any(k in int_low for k in ["dpp-4", "dpp4", "dpp 4", "gliptin"]):
+            expansion_terms.extend(["sitagliptin", "linagliptin", "saxagliptin"])
+        elif any(k in int_low for k in ["tzd", "thiazolidinedione"]):
+            expansion_terms.extend(["pioglitazone", "rosiglitazone"])
+        elif any(k in int_low for k in ["sulfonylurea"]):
+            expansion_terms.extend(["glimepiride", "glipizide", "glyburide"])
+
+    for out_term in normalized_outcomes:
+        out_low = out_term.lower()
+        if "heart failure" in out_low or "hospitalization" in out_low:
+            expansion_terms.extend(["hhf"])
+        if "cardiovascular" in out_low or "mace" in out_low:
+            expansion_terms.extend(["mace"])
+
+    for exp_t in expansion_terms:
+        if exp_t not in seen_tokens:
+            seen_tokens.add(exp_t)
+            deduped_tokens.append(exp_t)
+
     query_type = classify_query_intent(query)
     normalized_text = " ".join(deduped_tokens) if deduped_tokens else query
     hypothesis_text = query_to_hypothesis(query)
+
+    expanded_interventions = expand_interventions(interventions, query)
+    expanded_outcomes = expand_outcomes(normalized_outcomes, query)
 
     result = {
         "original_query": query,
@@ -224,6 +470,8 @@ def normalize_query(query: str) -> Dict[str, Any]:
         "biomarkers": biomarkers,
         "population": population,
         "comparator": comparator,
+        "expanded_interventions": expanded_interventions,
+        "expanded_outcomes": expanded_outcomes,
         "normalized_text": normalized_text,
         "dense_query": query,
         "hypothesis_text": hypothesis_text,

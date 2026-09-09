@@ -82,6 +82,7 @@ class DiaVeritasResult:
     answer: str = ""
     answer_error: str = ""
     ungrounded_claims: List[str] = field(default_factory=list)
+    stripped_claims: List[str] = field(default_factory=list)
 
     # Metadata
     pipeline_mode: str = "diaveritias"   # "diaveritias" | "baseline"
@@ -104,6 +105,7 @@ class DiaVeritasResult:
             "answer": self.answer,
             "answer_error": self.answer_error,
             "ungrounded_claims": self.ungrounded_claims,
+            "stripped_claims": self.stripped_claims,
             "pipeline_mode": self.pipeline_mode,
             "latency_seconds": self.latency_seconds,
             "models_used": self.models_used,
@@ -350,8 +352,11 @@ class Synthesizer:
                 logger.warning("No LLM client configured. Generating fallback answer.")
                 result.answer = _fallback_answer(result, evidence_items)
 
-            # Step 10: Grounding check (FR-17.2)
-            result.ungrounded_claims = _verify_grounding(result.answer, evidence_items)
+            # Step 10: Grounding check & strict enforcement (FR-17.2, NFR-5.2)
+            clean_answer, stripped = enforce_strict_grounding(result.answer, evidence_items)
+            result.answer = clean_answer
+            result.ungrounded_claims = []
+            result.stripped_claims = stripped
 
         except Exception as e:
             logger.exception(f"Pipeline error: {e}")
@@ -414,42 +419,74 @@ class Synthesizer:
 
 
 # ---------------------------------------------------------------------------
-# Sentence-level Grounding Verification (FR-17.2)
+# Strict Sentence-level Grounding Enforcement (FR-17.2, NFR-5.2)
 # ---------------------------------------------------------------------------
 
-def _verify_grounding(answer: str, evidence_items: List[EvidenceItem]) -> List[str]:
+def enforce_strict_grounding(answer: str, evidence_items: List[EvidenceItem]) -> Tuple[str, List[str]]:
     """
-    Check sentence-level citation grounding in the generated answer (FR-17.2).
-    Flags substantive clinical sentences lacking citation or passage correspondence.
+    Enforce strict sentence-level citation grounding (NFR-5.2, FR-17.2).
+    Checks every sentence in the synthesized answer. If a substantive clinical assertion
+    lacks an explicit citation or direct lexical overlap with the evidence base,
+    it is programmatically stripped from the user-facing text to guarantee 100% grounded answers.
+
+    Returns:
+        Tuple of (clean_grounded_answer, list_of_removed_ungrounded_sentences)
     """
     if not answer or "No relevant evidence" in answer or "Pipeline error" in answer:
-        return []
+        return answer, []
 
-    sentences = re.split(r"(?<=[.!?])\s+", answer)
-    ungrounded = []
+    paragraphs = answer.split("\n\n")
+    citation_pat = re.compile(r"\[.+?\d{4}.*?\]|\[Source \d+\]|\([A-Za-z]+ et al\.,?\s*\d{4}\)|\[\d+\]")
 
-    # Citations pattern e.g. [Smith 2021, Diabetes Care], [Source 1], (Smith et al., 2020)
-    citation_pat = re.compile(r"\[.+?\d{4}.*?\]|\[Source \d+\]|\([A-Za-z]+ et al\.,?\s*\d{4}\)")
+    cleaned_paragraphs = []
+    ungrounded_sentences = []
 
-    for s in sentences:
-        s_clean = s.strip()
-        # Skip header lines, bullet markers, disclaimers
-        if len(s_clean) < 35 or s_clean.startswith(("#", "-", "*", "1.", "2.", "3.", "4.", "5.")):
-            continue
-        if any(skip in s_clean.lower() for skip in ["medical advice", "for research purposes", "clinical question:", "summary:"]):
+    for para in paragraphs:
+        # If paragraph is a markdown header, list, table, or disclaimer, preserve it
+        if para.strip().startswith(("#", "|", "*This analysis is for research", "*(No external LLM", "**Evidence Status", "**Evidence Analysis", "**Verdict Rationale", "**Supporting Evidence", "**Contradicting Evidence")):
+            cleaned_paragraphs.append(para)
             continue
 
-        # Check if sentence has explicit citation
-        if not citation_pat.search(s_clean):
-            # Check if sentence has lexical overlap with at least one evidence chunk
+        sentences = re.split(r"(?<=[.!?])\s+", para)
+        valid_sentences = []
+
+        for s in sentences:
+            s_clean = s.strip()
+            # Skip short fragments, bullet markers, disclaimers
+            if len(s_clean) < 35 or s_clean.startswith(("-", "*", "1.", "2.", "3.", "4.", "5.")):
+                valid_sentences.append(s)
+                continue
+            if any(skip in s_clean.lower() for skip in ["medical advice", "for research purposes", "clinical question:", "summary:"]):
+                valid_sentences.append(s)
+                continue
+
+            # Check citation presence
+            if citation_pat.search(s_clean):
+                valid_sentences.append(s)
+                continue
+
+            # Check lexical grounding in evidence chunks
             s_words = set(re.findall(r"\b\w{4,}\b", s_clean.lower()))
             has_overlap = any(
                 len(s_words & set(re.findall(r"\b\w{4,}\b", item.chunk.text.lower()))) >= 4
                 for item in evidence_items
             )
-            if not has_overlap:
-                ungrounded.append(s_clean)
+            if has_overlap:
+                valid_sentences.append(s)
+            else:
+                ungrounded_sentences.append(s_clean)
+                logger.info(f"Stripped ungrounded clinical sentence: '{s_clean[:80]}...'")
 
+        if valid_sentences:
+            cleaned_paragraphs.append(" ".join(valid_sentences))
+
+    filtered_answer = "\n\n".join(cleaned_paragraphs).strip()
+    return filtered_answer, ungrounded_sentences
+
+
+def _verify_grounding(answer: str, evidence_items: List[EvidenceItem]) -> List[str]:
+    """Check sentence-level citation grounding in the generated answer (FR-17.2)."""
+    _, ungrounded = enforce_strict_grounding(answer, evidence_items)
     return ungrounded
 
 

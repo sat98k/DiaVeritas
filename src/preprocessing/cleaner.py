@@ -43,8 +43,8 @@ _NOISE_PATTERNS = [
 _INLINE_REPLACEMENTS = [
     # Citation numbers like [1], [2,3], [1-5]
     (re.compile(r"\[\d+(?:[-,]\d+)*\]"), " "),
-    # Superscript reference numbers (often appear as isolated digits in PDF)
-    (re.compile(r"\s\d{1,3}(?=\s)"), " "),  # only very short isolated numbers
+    # Superscript reference numbers attached directly to words or punctuation (e.g. 'patients12 were')
+    (re.compile(r"(?<=[a-zA-Z\.,;])\d{1,2}(?=\s|$)"), " "),
     # Hyphenation artifacts (line-break hyphens)
     (re.compile(r"(\w)-\s*\n\s*(\w)"), r"\1\2"),
     # Multiple spaces

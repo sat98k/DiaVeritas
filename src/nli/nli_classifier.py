@@ -170,6 +170,16 @@ _DESIGN_PENALTIES = {
 }
 
 
+def normalize_premise_artifacts(text: str) -> str:
+    """Normalize common clinical text artifacts and abbreviations for NLI alignment."""
+    t = re.sub(r"\btype\s+diabetes\b", "type 2 diabetes", text, flags=re.IGNORECASE)
+    t = re.sub(r"\bHHF\b", "hospitalization for heart failure", t)
+    t = re.sub(r"\bSGLT-2i\b|\bSGLT2i\b|\bSGLT2is\b", "SGLT2 inhibitors", t, flags=re.IGNORECASE)
+    t = re.sub(r"\bGLP-1RA\b|\bGLP-1 RAs\b|\bGLP1-RA\b", "GLP-1 receptor agonists", t, flags=re.IGNORECASE)
+    t = re.sub(r"\bDPP-4i\b|\bDPP4i\b", "DPP-4 inhibitors", t, flags=re.IGNORECASE)
+    return t
+
+
 def select_salient_premise_sentences(
     text: str,
     hypothesis: str,
@@ -181,36 +191,47 @@ def select_salient_premise_sentences(
     Cross-encoder NLI models (MNLI-trained) operate on sentence-pair attention.
     Passing a 400-word paragraph causes background demographic and protocol text to dilute
     attention and wash out decisive clinical findings into NEUTRAL.
-    Scoring individual sentences by lexical overlap and clinical outcome indicators ensures
-    the NLI model evaluates the exact assertions made by the study.
+    Scoring individual sentences and adjacent sentence pairs ensures the NLI model
+    evaluates the complete clinical assertion (finding + cohort) without noise.
     """
     if not text or len(text.strip()) < 20:
         return [text.strip()] if text and text.strip() else []
 
+    cleaned_text = normalize_premise_artifacts(text)
     raw_sentences = [
-        s.strip() for s in re.split(r"(?<=[.!?])\s+", text) if len(s.strip()) >= 20
+        s.strip() for s in re.split(r"(?<=[.!?])\s+", cleaned_text) if len(s.strip()) >= 20
     ]
     if not raw_sentences:
-        return [text[:500].strip()]
-    if len(raw_sentences) <= max_candidates:
-        return raw_sentences
+        return [cleaned_text[:500].strip()]
+
+    candidate_units = list(raw_sentences)
+    for i in range(len(raw_sentences) - 1):
+        pair = f"{raw_sentences[i]} {raw_sentences[i+1]}"
+        if len(pair.split()) <= 80:
+            candidate_units.append(pair)
 
     hyp_tokens = set(re.findall(r"\b[a-zA-Z0-9_-]+\b", hypothesis.lower())) - _COMMON_STOPWORDS
 
     scored: List[Tuple[float, str]] = []
-    total_sents = len(raw_sentences)
-    for idx, s in enumerate(raw_sentences):
-        s_lower = s.lower()
-        s_tokens = set(re.findall(r"\b[a-zA-Z0-9_-]+\b", s_lower))
-        overlap = len(hyp_tokens & s_tokens)
-        cue_bonus = 2.5 if any(cue in s_lower for cue in _OUTCOME_CUES) else 0.0
-        design_penalty = 4.0 if any(dp in s_lower for dp in _DESIGN_PENALTIES) else 0.0
-        pos_bonus = 1.0 if idx >= total_sents // 2 else 0.0
-        score = overlap * 2.0 + cue_bonus + pos_bonus - design_penalty
-        scored.append((score, s))
+    for u in candidate_units:
+        u_lower = u.lower()
+        u_tokens = set(re.findall(r"\b[a-zA-Z0-9_-]+\b", u_lower))
+        overlap = len(hyp_tokens & u_tokens)
+        cue_bonus = 2.5 if any(cue in u_lower for cue in _OUTCOME_CUES) else 0.0
+        design_penalty = 4.0 if any(dp in u_lower for dp in _DESIGN_PENALTIES) else 0.0
+        score = overlap * 2.0 + cue_bonus - design_penalty
+        scored.append((score, u))
 
     scored.sort(key=lambda x: x[0], reverse=True)
-    return [s for _, s in scored[:max_candidates]]
+    selected = []
+    seen = set()
+    for _, unit in scored:
+        if unit not in seen:
+            seen.add(unit)
+            selected.append(unit)
+        if len(selected) >= max_candidates:
+            break
+    return selected or [cleaned_text[:500].strip()]
 
 
 # ---------------------------------------------------------------------------
@@ -364,14 +385,14 @@ def classify_evidence_against_query(
         for c in chunk_cand_results:
             ent = c["scores"].get("ENTAILMENT", 0.0)
             con = c["scores"].get("CONTRADICTION", 0.0)
-            if c["label"] in ("ENTAILMENT", "CONTRADICTION") and c["confidence"] >= 0.40:
+            if c["label"] in ("ENTAILMENT", "CONTRADICTION") and c["confidence"] >= 0.50:
                 decisive.append(c)
-            elif ent >= 0.35 and ent > 2.0 * con:
+            elif ent >= 0.50 and ent > 2.0 * con:
                 c_adjusted = dict(c)
                 c_adjusted["label"] = "ENTAILMENT"
                 c_adjusted["confidence"] = ent
                 decisive.append(c_adjusted)
-            elif con >= 0.35 and con > 2.0 * ent:
+            elif con >= 0.50 and con > 2.0 * ent:
                 c_adjusted = dict(c)
                 c_adjusted["label"] = "CONTRADICTION"
                 c_adjusted["confidence"] = con

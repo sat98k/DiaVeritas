@@ -24,7 +24,7 @@ def _make_item(
     full_text = f"{claim_text} n={sample_size}. {rob_phrase}"
     chunk = Chunk(
         chunk_id=chunk_id,
-        paper_id=f"paper_{study_type[:3]}",
+        paper_id=f"paper_{study_type[:3]}_{abs(hash(claim_text)) % 1000}",
         pmc_id="PMC12345",
         title=f"Study of Drug A in {study_type}",
         authors=["Author A"],
