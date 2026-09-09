@@ -194,3 +194,43 @@ def test_single_contradicting_study_forces_inconclusive():
 
     assert result.status == INCONCLUSIVE
     assert "Insufficient study replication" in result.rationale
+
+
+def test_q1_investigation_single_supporting_study_safely_forces_inconclusive():
+    """
+    Phase 2 Investigation (DiaVeritas Fix Plan v2):
+    In Q1 ('Does metformin reduce HbA1c levels in patients with Type 2 Diabetes?'),
+    hybrid retrieval returns 10 distinct papers in top-10 (PMIDs 28332301, 34709582,
+    28589542, 35651475, 27042415, 40329646, 33888772, 34335036, 26242578, 40161285).
+    However, at the NLI classification stage, only 1 paper (PMID 26242578) directly asserts
+    metformin monotherapy HbA1c reduction with high entailment; other chunks evaluate
+    add-on/combinations (sulfonylureas, linagliptin), guidelines, or prediabetes cohorts.
+
+    Deduplication via `_distinct_study_ids()` correctly receives 1 supporting item and
+    does NOT collapse multiple studies. Under FR-16.2 / FR-16.4, the system MUST NOT
+    issue an absolute SUPPORTED verdict on a single trial, but instead safely withhold
+    it as INCONCLUSIVE. This test asserts that 1 supporting study safely yields INCONCLUSIVE.
+    """
+    q1_study = _create_study_item(
+        paper_id="26242578",
+        chunk_id="26242578_Introduction_001",
+        relationship="Supports",
+        grade_weight=3.0,
+        confidence=0.91,
+    )
+
+    summary = EvidenceRelationshipSummary(
+        total=10,
+        supporting=[q1_study],
+        contradicting=[],
+        contextual=[],
+        neutral=[],
+    )
+
+    result = determine_evidence_status(summary, avg_nli_confidence=0.91, avg_retrieval_relevance=0.85)
+
+    assert result.status == INCONCLUSIVE
+    assert result.n_supporting == 1
+    assert "Insufficient study replication: only 1 independent study retrieved" in result.rationale
+    assert result.confidence_breakdown["independent_study_count"] == 0.25
+

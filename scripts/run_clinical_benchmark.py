@@ -58,14 +58,32 @@ def load_benchmark_subset() -> List[Dict[str, str]]:
     return subset
 
 def compute_grounding_stats(answer: str, passages: List[str]) -> Dict[str, float]:
-    """Compute claim support and citation completeness for an answer."""
+    """
+    Compute claim support, citation completeness, and citation correctness per IEEE SRS:
+    - EV-1: Claim Evidence Support: (supported claims) / (total verifiable claims)
+    - EV-2: Citation Completeness: (claims with citations) / (total verifiable claims)
+    - EV-3: Citation Correctness: (correct citations) / (total citations)
+    """
     if not answer:
         return {"ev1_support": 0.0, "ev2_completeness": 0.0, "ev3_correctness": 0.0}
     
-    paragraphs = [p for p in answer.split("\n\n") if p.strip() and not p.strip().startswith(("#", "|", "*", "**Evidence Status"))]
+    meta_prefixes = (
+        "#", "|", "*", "**evidence status", "**evidence analysis",
+        "**verdict rationale", "**supporting evidence", "**contradicting evidence",
+        "**contextual differences"
+    )
+    paragraphs = [
+        p for p in answer.split("\n\n")
+        if p.strip() and not p.strip().lower().startswith(meta_prefixes)
+    ]
     sentences = []
     for p in paragraphs:
-        sentences.extend([s.strip() for s in re.split(r"(?<=[.!?])\s+", p) if len(s.strip()) > 35])
+        for s in re.split(r"(?<=[.!?])\s+", p):
+            s_clean = s.strip()
+            if (len(s_clean) > 35 and
+                not s_clean.startswith(("- Supporting:", "- Contradicting:", "- Contextual:", "- Neutral:", "1.", "2.", "3.", "4.", "5.")) and
+                not any(skip in s_clean.lower() for skip in ["medical advice", "for research purposes", "clinical question:"])):
+                sentences.append(s_clean)
     
     if not sentences:
         return {"ev1_support": 1.0, "ev2_completeness": 1.0, "ev3_correctness": 1.0}
@@ -73,16 +91,19 @@ def compute_grounding_stats(answer: str, passages: List[str]) -> Dict[str, float
     citation_pat = re.compile(r"\[.+?\d{4}.*?\]|\[Source \d+\]|\([A-Za-z]+ et al\.,?\s*\d{4}\)|\[\d+\]")
     cited_sentences = [s for s in sentences if citation_pat.search(s)]
     
-    # Check lexical support in passages
+    # Check lexical/semantic support in passages
     supported_sentences = []
     for s in sentences:
-        s_words = set(re.findall(r"\b\w{4,}\b", s.lower()))
+        s_words = set(re.findall(r"\b\w{4,}\b", s.lower())) - {"pmid", "journal", "study", "trial", "results", "table"}
         if any(len(s_words & set(re.findall(r"\b\w{4,}\b", p.lower()))) >= 3 for p in passages):
             supported_sentences.append(s)
             
+    supported_set = set(supported_sentences)
+    correct_cited = [s for s in cited_sentences if s in supported_set]
+
     ev1 = len(supported_sentences) / len(sentences)
     ev2 = len(cited_sentences) / len(sentences)
-    ev3 = min(1.0, ev1 / (ev2 or 1.0)) if ev2 > 0 else 0.0
+    ev3 = (len(correct_cited) / len(cited_sentences)) if cited_sentences else (1.0 if not sentences else 0.0)
     
     return {
         "ev1_support": round(ev1, 3),

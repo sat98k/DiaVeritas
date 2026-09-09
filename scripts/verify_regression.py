@@ -23,6 +23,9 @@ def main():
         ("Q2A", "What are the cardiovascular effects of SGLT2 inhibitors in patients with Type 2 Diabetes?"),
         ("Q2C", "Does empagliflozin reduce hospitalization for heart failure in Type 2 Diabetes?"),
         ("Q2D", "Does dapagliflozin reduce hospitalization for heart failure in Type 2 Diabetes?"),
+        ("M1_Coffee_Sugar", "Does avoiding added sugar in coffee prevent progression from prediabetes to Type 2 Diabetes?"),
+        ("M2_Rosiglitazone", "Does rosiglitazone increase the risk of myocardial infarction in patients with Type 2 Diabetes?"),
+        ("M3_Reversed_Metformin", "Does metformin increase the risk of cardiovascular mortality in patients with Type 2 Diabetes?"),
     ]
 
     print("=" * 80)

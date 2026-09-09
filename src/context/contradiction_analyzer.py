@@ -149,69 +149,218 @@ def _compare_dimension(
     base_description: str,
 ) -> Optional[ContextualDifference]:
     """
-    Compare a single contextual dimension between two claims.
+    Compare a single contextual dimension between two claims per FR-14.2/FR-14.4.
 
-    Returns a ContextualDifference if a meaningful difference is detected,
-    or None if the values are too similar or both are "Not reported".
+    Returns a ContextualDifference if an actual, material clinical difference
+    is detected, or None if the values are comparable or missing.
+    Missing metadata in one or both claims does NOT constitute a contextual difference.
     """
-    # If both are missing, no useful comparison
-    if val_a == "Not reported" and val_b == "Not reported":
+    if val_a == "Not reported" or val_b == "Not reported":
         return None
 
-    # If one is missing, note it
-    if val_a == "Not reported" or val_b == "Not reported":
-        known = val_b if val_a == "Not reported" else val_a
-        return ContextualDifference(
-            dimension=dimension,
-            claim_a_value=val_a,
-            claim_b_value=val_b,
-            description=(
-                f"One study does not report {dimension} "
-                f"(the other reports: '{known}')"
-            ),
-        )
+    # Compare based on specific dimension semantics
+    if dimension == "population":
+        return _compare_population(val_a, val_b, base_description)
+    elif dimension == "intervention":
+        return _compare_intervention(val_a, val_b, base_description)
+    elif dimension == "comparator":
+        return _compare_comparator(val_a, val_b, base_description)
+    elif dimension == "outcome":
+        return _compare_outcome(val_a, val_b, base_description)
+    elif dimension == "duration":
+        return _compare_duration(val_a, val_b, base_description)
+    elif dimension == "study_context":
+        # Per FR-14.4 and SRS 3.14: study design, sample size, and bias differences
+        # are methodological certainty factors handled in Module 15 (GRADE),
+        # not contextual differences in Module 14.
+        return None
 
-    # Check for meaningful difference
-    if _texts_meaningfully_differ(val_a, val_b):
+    return None
+
+
+def _clean_text(t: str) -> str:
+    """Normalize whitespace and lowercasing."""
+    return re.sub(r"\s+", " ", t.lower().strip())
+
+
+def _compare_population(val_a: str, val_b: str, base_desc: str) -> Optional[ContextualDifference]:
+    """Compare patient populations for explicit, named subgroup divergences."""
+    a = _clean_text(val_a)
+    b = _clean_text(val_b)
+    if a == b:
+        return None
+
+    # Check 1: Explicit clinical subgroup polarity / negation (e.g. obese vs non-obese, with vs without)
+    polarity_contrasts = [
+        (["non-obese", "non obese", "normal weight", "lean", "bmi < 25", "without obesity"],
+         ["obese", "obesity", "overweight", "bmi >= 30", "bmi > 30"]),
+        (["without ckd", "without kidney disease", "without renal impairment", "normal renal function", "preserved egfr"],
+         ["with ckd", "chronic kidney disease", "renal impairment", "nephropathy", "esrd", "dialysis", "egfr < 30", "egfr < 60"]),
+        (["without heart failure", "no heart failure", "without hf"],
+         ["heart failure", "hfref", "hfpef", "congestive heart failure", "with heart failure"]),
+        (["without cvd", "primary prevention", "no prior cv", "low cv risk"],
+         ["established cvd", "secondary prevention", "prior mi", "coronary artery disease", "cad", "ascvd"]),
+        (["pediatric", "children", "adolescents", "youth", "< 18"],
+         ["adult", "adults", "elderly", "older adults", ">= 65"]),
+        (["type 1 diabetes", "t1d", "t1dm"],
+         ["type 2 diabetes", "t2d", "t2dm"]),
+        (["gestational diabetes", "gdm"],
+         ["type 2 diabetes", "t2d", "t2dm"]),
+    ]
+
+    for group1, group2 in polarity_contrasts:
+        a_in_g1 = any(term in a for term in group1)
+        b_in_g1 = any(term in b for term in group1)
+        a_in_g2 = any(term in a for term in group2)
+        b_in_g2 = any(term in b for term in group2)
+
+        if (a_in_g1 and b_in_g2) or (a_in_g2 and b_in_g1):
+            return ContextualDifference(
+                dimension="population",
+                claim_a_value=val_a,
+                claim_b_value=val_b,
+                description=f"Studies examined divergent patient cohorts: '{val_a}' vs '{val_b}'",
+            )
+
+    # Check 2: Explicit comorbidity restriction vs general T2D
+    # e.g., one study restricted to severe ESRD/dialysis while the other is general T2D
+    restricted_subgroups = [
+        "esrd", "dialysis", "egfr < 30", "severe renal impairment",
+        "heart failure with reduced ejection fraction", "hfref",
+        "pediatric", "children", "pregnancy", "gestational",
+    ]
+    for sub in restricted_subgroups:
+        a_has_sub = sub in a
+        b_has_sub = sub in b
+        if a_has_sub != b_has_sub:
+            restricted_val = val_a if a_has_sub else val_b
+            general_val = val_b if a_has_sub else val_a
+            return ContextualDifference(
+                dimension="population",
+                claim_a_value=val_a,
+                claim_b_value=val_b,
+                description=f"Evidence population restricted to '{restricted_val}' subgroup vs general cohort '{general_val}'",
+            )
+
+    # If both describe general T2D (even with common descriptors like 'patients with type 2 diabetes and obesity'),
+    # they are clinically comparable cohorts, not divergent contexts.
+    return None
+
+
+def _compare_intervention(val_a: str, val_b: str, base_desc: str) -> Optional[ContextualDifference]:
+    """Compare interventions for material drug mismatch."""
+    a = _clean_text(val_a)
+    b = _clean_text(val_b)
+    if a == b:
+        return None
+
+    # Normalize out generic medication words
+    def _drug_stem(t: str) -> str:
+        s = re.sub(r"\b(monotherapy|combination|therapy|treatment|oral|tablets?|hydrochloride|daily|dose)\b", "", t)
+        return re.sub(r"\s+", " ", s).strip()
+
+    stem_a = _drug_stem(a)
+    stem_b = _drug_stem(b)
+    if stem_a and stem_b and (stem_a in stem_b or stem_b in stem_a):
+        return None
+
+    # Check for different active ingredients
+    return ContextualDifference(
+        dimension="intervention",
+        claim_a_value=val_a,
+        claim_b_value=val_b,
+        description=f"Studies examined different interventions: '{val_a}' vs '{val_b}'",
+    )
+
+
+def _compare_comparator(val_a: str, val_b: str, base_desc: str) -> Optional[ContextualDifference]:
+    """Compare control/comparator for placebo vs active comparator differences."""
+    a = _clean_text(val_a)
+    b = _clean_text(val_b)
+    if a == b:
+        return None
+
+    placebo_terms = ["placebo", "standard care", "usual care", "control", "standard of care"]
+    a_is_placebo = any(p in a for p in placebo_terms)
+    b_is_placebo = any(p in b for p in placebo_terms)
+
+    if a_is_placebo != b_is_placebo:
         return ContextualDifference(
-            dimension=dimension,
+            dimension="comparator",
             claim_a_value=val_a,
             claim_b_value=val_b,
-            description=f"{base_description}: '{val_a}' vs '{val_b}'",
+            description=f"Studies used different comparators: '{val_a}' vs '{val_b}'",
         )
 
     return None
 
 
-def _texts_meaningfully_differ(a: str, b: str) -> bool:
-    """
-    Check if two text values are meaningfully different.
+def _compare_outcome(val_a: str, val_b: str, base_desc: str) -> Optional[ContextualDifference]:
+    """Compare outcomes for surrogate biomarker vs hard clinical endpoint divergence."""
+    a = _clean_text(val_a)
+    b = _clean_text(val_b)
+    if a == b:
+        return None
 
-    Checks:
-    1. Exact match (case-insensitive)
-    2. Explicit clinical negation/subgroup divergence (e.g., 'obese' vs 'non-obese', 'with' vs 'without')
-    3. Jaccard word similarity threshold (<0.6 treated as different)
-    """
-    a_str = a.lower().strip()
-    b_str = b.lower().strip()
-    if a_str == b_str:
-        return False
+    # Surrogate glycemic endpoints vs hard clinical endpoints
+    surrogates = ["hba1c", "blood glucose", "glycemic control", "fpg", "postprandial glucose"]
+    hard_endpoints = ["mortality", "death", "myocardial infarction", "stroke", "heart failure hospitalization", "mace"]
 
-    # Check for explicit clinical subgroup polarity
-    negation_prefixes = ["non-", "non ", "not ", "without ", "no "]
-    a_neg = any(neg in a_str for neg in negation_prefixes)
-    b_neg = any(neg in b_str for neg in negation_prefixes)
-    if a_neg != b_neg:
-        return True
+    a_is_surrogate = any(s in a for s in surrogates)
+    b_is_surrogate = any(s in b for s in surrogates)
+    a_is_hard = any(h in a for h in hard_endpoints)
+    b_is_hard = any(h in b for h in hard_endpoints)
 
-    words_a = set(re.findall(r"\b\w+\b", a_str))
-    words_b = set(re.findall(r"\b\w+\b", b_str))
-    if not words_a or not words_b:
-        return True
-    overlap = len(words_a & words_b)
-    max_len = max(len(words_a), len(words_b))
-    similarity = overlap / max_len
-    return similarity < 0.6
+    if (a_is_surrogate and b_is_hard) or (a_is_hard and b_is_surrogate):
+        return ContextualDifference(
+            dimension="outcome",
+            claim_a_value=val_a,
+            claim_b_value=val_b,
+            description=f"Studies measured different outcome tiers: surrogate endpoint ({val_a}) vs clinical endpoint ({val_b})",
+        )
+
+    # Both are within same broad outcome domain (e.g. CV mortality vs mortality vs MACE)
+    if (a_is_hard and b_is_hard) or (a_is_surrogate and b_is_surrogate):
+        return None
+
+    # Check word overlap
+    words_a = set(re.findall(r"\b\w{3,}\b", a))
+    words_b = set(re.findall(r"\b\w{3,}\b", b))
+    if words_a & words_b:
+        return None
+
+    return ContextualDifference(
+        dimension="outcome",
+        claim_a_value=val_a,
+        claim_b_value=val_b,
+        description=f"Studies measured different outcomes: '{val_a}' vs '{val_b}'",
+    )
+
+
+def _compare_duration(val_a: str, val_b: str, base_desc: str) -> Optional[ContextualDifference]:
+    """Compare duration for acute vs chronic study design divergence."""
+    a = _clean_text(val_a)
+    b = _clean_text(val_b)
+    if a == b:
+        return None
+
+    acute_terms = ["acute", "hours", "days", "single dose", "in-hospital", "1 week", "2 weeks"]
+    chronic_terms = ["years", "long-term", "52 weeks", "104 weeks", "multi-year", "5 years"]
+
+    a_acute = any(t in a for t in acute_terms)
+    b_acute = any(t in b for t in acute_terms)
+    a_chronic = any(t in a for t in chronic_terms)
+    b_chronic = any(t in b for t in chronic_terms)
+
+    if (a_acute and b_chronic) or (a_chronic and b_acute):
+        return ContextualDifference(
+            dimension="duration",
+            claim_a_value=val_a,
+            claim_b_value=val_b,
+            description=f"Studies differed in timeframe: acute ({val_a}) vs chronic/long-term ({val_b})",
+        )
+
+    return None
 
 
 def _classify_conflict(
@@ -220,27 +369,24 @@ def _classify_conflict(
     claim_b: StructuredClaim,
 ) -> str:
     """
-    Classify the type of conflict based on identified differences.
+    Classify the type of conflict based on identified differences per FR-14.3/FR-14.4.
 
-    CONTEXTUAL: Meaningful differences in population, intervention, outcome, or duration
-    SEMANTIC: Contradictory claims with very similar context
-    UNRESOLVED: Insufficient information to classify
+    SEMANTIC (True Contradiction): Default when Intervention, Population (at stated
+        specificity), and Outcome match and NLI indicates contradiction.
+    CONTEXTUAL: Material, named clinical divergence (e.g. population subgroup
+        polarity/divergence, active comparator vs placebo, acute vs chronic duration).
     """
-    if not differences:
-        # No contextual differences detected — claims appear to be in similar context
-        if (claim_a.intervention != "Not reported" and
-                claim_b.intervention != "Not reported"):
-            return "SEMANTIC"
-        return "UNRESOLVED"
+    # If explicit, named clinical differences were identified, route to CONTEXTUAL
+    clinical_diffs = [
+        d for d in differences
+        if d.dimension in ("population", "intervention", "comparator", "outcome", "duration")
+    ]
 
-    # Key dimensions that suggest contextual rather than semantic conflict
-    key_contextual_dims = {"population", "intervention", "outcome", "duration"}
-    contextual_dims_found = {d.dimension for d in differences}
-
-    if key_contextual_dims & contextual_dims_found:
+    if clinical_diffs:
         return "CONTEXTUAL"
 
-    return "UNRESOLVED"
+    # Default to SEMANTIC (True Contradiction) when PICO context aligns
+    return "SEMANTIC"
 
 
 def _generate_summary(

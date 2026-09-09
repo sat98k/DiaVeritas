@@ -95,3 +95,28 @@ def test_lexical_grounding_preserved_even_without_inline_brackets():
 
     assert "empagliflozin" in clean_answer
     assert len(stripped) == 0
+
+
+def test_citation_attached_to_unrelated_passage_is_stripped():
+    """
+    Phase 4 Acceptance Test:
+    A sentence that attaches a valid citation marker to a completely unrelated/unsupported
+    claim MUST be detected as misattributed and programmatically stripped, while the
+    legitimately supported sentence is preserved.
+    """
+    evidence = _make_mock_evidence([
+        "Empagliflozin significantly reduced hospitalization for heart failure in patients with type 2 diabetes."
+    ])
+
+    draft = (
+        "Empagliflozin significantly reduced hospitalization for heart failure [Zinman 2015, N Engl J Med]. "
+        "Metformin completely cures neurological tremors and Parkinsonism within two weeks [Zinman 2015, N Engl J Med]."
+    )
+
+    clean_answer, stripped = enforce_strict_grounding(draft, evidence)
+
+    assert "[Zinman 2015, N Engl J Med]" in clean_answer
+    assert "Empagliflozin significantly reduced hospitalization" in clean_answer
+    assert "neurological tremors" not in clean_answer, "Misattributed sentence must be programmatically stripped"
+    assert len(stripped) == 1
+    assert "neurological tremors" in stripped[0]

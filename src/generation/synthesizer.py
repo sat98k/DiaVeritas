@@ -284,13 +284,15 @@ class Synthesizer:
             target_ints = result.normalized_query.get("interventions", [])
             target_outs = result.normalized_query.get("outcomes", [])
             target_pop = result.normalized_query.get("population", [])
+            if not target_pop and result.normalized_query.get("disease"):
+                target_pop = result.normalized_query.get("disease")
             ref_claim = StructuredClaim(
                 chunk_id="query_ref",
                 paper_id="query",
                 section="Query",
                 intervention=target_ints[0] if target_ints else "Target Intervention",
                 outcome=target_outs[0] if target_outs else "Target Outcome",
-                population=target_pop[0] if target_pop else "Not reported",
+                population=target_pop[0] if target_pop else "Type 2 Diabetes",
                 direction="Reduction" if any(w in question.lower() for w in ["reduce", "lower", "decrease", "prevent"]) else "Increase",
                 raw_text=question,
             )
@@ -422,12 +424,68 @@ class Synthesizer:
 # Strict Sentence-level Grounding Enforcement (FR-17.2, NFR-5.2)
 # ---------------------------------------------------------------------------
 
+def _find_cited_chunks(sentence: str, evidence_items: List[EvidenceItem]) -> List[Chunk]:
+    """Find which evidence chunk(s) are referenced by citation markers in the sentence."""
+    cited = []
+    s_lower = sentence.lower()
+
+    for idx, item in enumerate(evidence_items, 1):
+        chunk = item.chunk
+        # 1. Match [Source N], [Passage N], or [N]
+        if f"source {idx}" in s_lower or f"passage {idx}" in s_lower or f"[{idx}]" in sentence:
+            cited.append(chunk)
+            continue
+
+        # 2. Match PMID / paper_id
+        if chunk.paper_id and chunk.paper_id != "Not reported" and chunk.paper_id.lower() in s_lower:
+            cited.append(chunk)
+            continue
+
+        # 3. Match Author + Year (e.g. "Smith 2022" or "Smith et al. 2022")
+        if chunk.authors and chunk.year and chunk.year != "?":
+            first_author = chunk.authors[0].split()[0].replace(",", "").lower()
+            if len(first_author) >= 3 and first_author in s_lower and str(chunk.year) in s_lower:
+                cited.append(chunk)
+                continue
+
+        # 4. Match Title substring if in brackets
+        if chunk.title and len(chunk.title) >= 10:
+            title_stem = chunk.title[:30].lower()
+            if title_stem in s_lower:
+                cited.append(chunk)
+                continue
+
+    return cited
+
+
+def _passage_supports_sentence(sentence: str, chunk: Chunk) -> bool:
+    """Check if a specific evidence chunk semantically/lexically supports a sentence."""
+    skip_words = {
+        "pmid", "doi", "trial", "study", "studies", "journal",
+        "author", "source", "passage", "table", "figure",
+    }
+    s_words = {
+        w for w in re.findall(r"\b[a-z]{4,}\b", sentence.lower())
+        if w not in skip_words
+    }
+    if not s_words:
+        return True
+
+    chunk_words = {
+        w for w in re.findall(r"\b[a-z]{4,}\b", chunk.text.lower())
+        if w not in skip_words
+    }
+
+    overlap = s_words & chunk_words
+    return len(overlap) >= 3 or (len(s_words) > 0 and (len(overlap) / len(s_words)) >= 0.35)
+
+
 def enforce_strict_grounding(answer: str, evidence_items: List[EvidenceItem]) -> Tuple[str, List[str]]:
     """
     Enforce strict sentence-level citation grounding (NFR-5.2, FR-17.2).
-    Checks every sentence in the synthesized answer. If a substantive clinical assertion
-    lacks an explicit citation or direct lexical overlap with the evidence base,
-    it is programmatically stripped from the user-facing text to guarantee 100% grounded answers.
+    Checks every sentence in the synthesized answer. Verifies that sentences with
+    citations are actually supported by the specific cited passage(s). Sentences with
+    unsupported citations or lacking evidence support are programmatically stripped.
 
     Returns:
         Tuple of (clean_grounded_answer, list_of_removed_ungrounded_sentences)
@@ -460,18 +518,40 @@ def enforce_strict_grounding(answer: str, evidence_items: List[EvidenceItem]) ->
                 valid_sentences.append(s)
                 continue
 
-            # Check citation presence
+            # Check citation presence and verify cited passage support
             if citation_pat.search(s_clean):
-                valid_sentences.append(s)
-                continue
+                cited_chunks = _find_cited_chunks(s_clean, evidence_items)
+                if cited_chunks:
+                    is_supported_by_cited = any(
+                        _passage_supports_sentence(s_clean, c) for c in cited_chunks
+                    )
+                    if is_supported_by_cited:
+                        valid_sentences.append(s)
+                        continue
+                    else:
+                        # Citation is attached, but the cited source does not support this claim
+                        ungrounded_sentences.append(s_clean)
+                        logger.info(f"Stripped citation-misattributed sentence: '{s_clean[:80]}...'")
+                        continue
+                else:
+                    # Citation pattern found but specific chunk not matched: check general evidence pool
+                    has_general_support = any(
+                        _passage_supports_sentence(s_clean, item.chunk)
+                        for item in evidence_items
+                    )
+                    if has_general_support:
+                        valid_sentences.append(s)
+                    else:
+                        ungrounded_sentences.append(s_clean)
+                        logger.info(f"Stripped ungrounded cited sentence: '{s_clean[:80]}...'")
+                    continue
 
-            # Check lexical grounding in evidence chunks
-            s_words = set(re.findall(r"\b\w{4,}\b", s_clean.lower()))
-            has_overlap = any(
-                len(s_words & set(re.findall(r"\b\w{4,}\b", item.chunk.text.lower()))) >= 4
+            # Sentence without citation marker: check lexical grounding in evidence chunks
+            has_general_overlap = any(
+                _passage_supports_sentence(s_clean, item.chunk)
                 for item in evidence_items
             )
-            if has_overlap:
+            if has_general_overlap:
                 valid_sentences.append(s)
             else:
                 ungrounded_sentences.append(s_clean)
