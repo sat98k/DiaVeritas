@@ -30,6 +30,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass, asdict, field
 
@@ -186,12 +187,25 @@ def _texts_meaningfully_differ(a: str, b: str) -> bool:
     """
     Check if two text values are meaningfully different.
 
-    Simple approach: if they share >60% of words, treat as similar.
+    Checks:
+    1. Exact match (case-insensitive)
+    2. Explicit clinical negation/subgroup divergence (e.g., 'obese' vs 'non-obese', 'with' vs 'without')
+    3. Jaccard word similarity threshold (<0.6 treated as different)
     """
-    if a.lower().strip() == b.lower().strip():
+    a_str = a.lower().strip()
+    b_str = b.lower().strip()
+    if a_str == b_str:
         return False
-    words_a = set(a.lower().split())
-    words_b = set(b.lower().split())
+
+    # Check for explicit clinical subgroup polarity
+    negation_prefixes = ["non-", "non ", "not ", "without ", "no "]
+    a_neg = any(neg in a_str for neg in negation_prefixes)
+    b_neg = any(neg in b_str for neg in negation_prefixes)
+    if a_neg != b_neg:
+        return True
+
+    words_a = set(re.findall(r"\b\w+\b", a_str))
+    words_b = set(re.findall(r"\b\w+\b", b_str))
     if not words_a or not words_b:
         return True
     overlap = len(words_a & words_b)
@@ -284,26 +298,22 @@ def analyze_contradictions(
     """
     Analyze all contradiction-labeled NLI results.
 
-    For each CONTRADICTION, compares the evidence claim's context against
-    either the reference claim (if provided) or against other evidence claims.
-
-    Args:
-        evidence_claims: All extracted evidence claims.
-        nli_results: Corresponding NLI results (same order as evidence_claims).
-        reference_claim: Optional reference claim representing the query.
-                         If None, contradictions are compared pairwise.
+    For each CONTRADICTION:
+      - If reference_claim is provided, compares the contradicting claim against it.
+      - If reference_claim is None, searches for supporting claims in the pool to compare
+        against pairwise (Study A vs Study B contradiction).
+      - If no supporting claims exist, compares pairwise against the first evidence claim
+        or analyzes internal clinical qualifiers.
 
     Returns:
         List of ContextComparisonResult for each detected contradiction.
     """
-    claim_by_id = {c.chunk_id: c for c in evidence_claims}
     contradiction_analyses: List[ContextComparisonResult] = []
 
-    contradictions = [
-        (claim, nli)
-        for claim, nli in zip(evidence_claims, nli_results)
-        if nli.label == "CONTRADICTION"
-    ]
+    # Pair claims with their NLI results
+    claim_nli_pairs = list(zip(evidence_claims, nli_results))
+    contradictions = [p for p in claim_nli_pairs if p[1].label == "CONTRADICTION"]
+    supporting = [p for p in claim_nli_pairs if p[1].label == "ENTAILMENT"]
 
     logger.info(f"Analyzing {len(contradictions)} detected contradictions...")
 
@@ -311,18 +321,25 @@ def analyze_contradictions(
         if reference_claim:
             # Compare contradiction against the reference (query) claim
             analysis = compare_claim_context(reference_claim, claim_b, nli)
+        elif supporting:
+            # Compare contradiction pairwise against the strongest supporting claim (Study A vs Study B)
+            best_supporting_claim = max(supporting, key=lambda x: x[1].confidence)[0]
+            analysis = compare_claim_context(best_supporting_claim, claim_b, nli)
+        elif len(evidence_claims) > 1:
+            # Compare against the first non-identical evidence claim
+            other_claim = next((c for c in evidence_claims if c.chunk_id != claim_b.chunk_id), evidence_claims[0])
+            analysis = compare_claim_context(other_claim, claim_b, nli)
         else:
-            # No reference — create a minimal placeholder
-            # This path is used when no query claim can be constructed
+            # Fallback when single claim without reference
             analysis = ContextComparisonResult(
                 claim_a_id="query",
                 claim_b_id=claim_b.chunk_id,
                 nli_label=nli.label,
                 nli_confidence=nli.confidence,
-                conflict_type="UNRESOLVED",
+                conflict_type="SEMANTIC",
                 summary=(
                     f"Contradiction detected (confidence: {nli.confidence:.2f}). "
-                    f"Insufficient context for detailed comparison."
+                    f"Evidence asserts opposite direction without detected contextual divergence."
                 ),
             )
         contradiction_analyses.append(analysis)

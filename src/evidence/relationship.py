@@ -26,6 +26,7 @@ from src.preprocessing.chunker import Chunk
 from src.claims.claim_extractor import StructuredClaim
 from src.nli.nli_classifier import NLIResult
 from src.context.contradiction_analyzer import ContextComparisonResult
+from src.evidence.grader import GRADEAssessment
 
 
 # ---------------------------------------------------------------------------
@@ -36,13 +37,14 @@ from src.context.contradiction_analyzer import ContextComparisonResult
 class EvidenceItem:
     """
     The complete analysis for one evidence chunk:
-    source metadata + claim + NLI result + context analysis.
+    source metadata + claim + NLI result + context analysis + GRADE certainty.
     """
     chunk: Chunk
     claim: StructuredClaim
     nli_result: NLIResult
     relationship: str                         # Supports | Contradicts | Contextual Difference | Neutral
     context_analysis: Optional[ContextComparisonResult] = None
+    grade: Optional[GRADEAssessment] = None
 
     def to_dict(self) -> Dict[str, Any]:
         d = {
@@ -60,6 +62,7 @@ class EvidenceItem:
             "nli": self.nli_result.to_dict(),
             "relationship": self.relationship,
             "context_analysis": self.context_analysis.to_dict() if self.context_analysis else None,
+            "grade": self.grade.to_dict() if self.grade else None,
         }
         return d
 
@@ -112,6 +115,7 @@ def build_evidence_items(
     claims: List[StructuredClaim],
     nli_results: List[NLIResult],
     context_analyses: List[ContextComparisonResult],
+    grades: Optional[List[GRADEAssessment]] = None,
 ) -> List[EvidenceItem]:
     """
     Build a list of EvidenceItems by combining all analysis components.
@@ -122,6 +126,7 @@ def build_evidence_items(
         nli_results: NLI results for each chunk (same order).
         context_analyses: Context comparisons for contradiction items.
                           Keyed by chunk_id.
+        grades: GRADE assessments for each chunk (same order).
 
     Returns:
         List of EvidenceItem objects in the same order as chunks.
@@ -131,8 +136,10 @@ def build_evidence_items(
         ca.claim_b_id: ca for ca in context_analyses
     }
 
+    grade_list = grades if grades and len(grades) == len(chunks) else [None] * len(chunks)
+
     items: List[EvidenceItem] = []
-    for chunk, claim, nli in zip(chunks, claims, nli_results):
+    for chunk, claim, nli, gr in zip(chunks, claims, nli_results, grade_list):
         context_analysis = context_map.get(chunk.chunk_id)
         relationship = derive_relationship(nli, context_analysis)
 
@@ -142,6 +149,7 @@ def build_evidence_items(
             nli_result=nli,
             relationship=relationship,
             context_analysis=context_analysis,
+            grade=gr,
         ))
 
     return items

@@ -211,11 +211,13 @@ def normalize_query(query: str) -> Dict[str, Any]:
             seen_tokens.add(t)
             deduped_tokens.append(t)
 
+    query_type = classify_query_intent(query)
     normalized_text = " ".join(deduped_tokens) if deduped_tokens else query
     hypothesis_text = query_to_hypothesis(query)
 
     result = {
         "original_query": query,
+        "query_type": query_type,
         "disease": diseases,
         "interventions": interventions,
         "outcomes": normalized_outcomes,
@@ -227,8 +229,43 @@ def normalize_query(query: str) -> Dict[str, Any]:
         "hypothesis_text": hypothesis_text,
     }
 
-    logger.debug(f"Query normalized: {result}")
+    logger.debug(f"Query normalized ({query_type}): {result}")
     return result
+
+
+QUERY_TYPE_VERIFICATION = "VERIFICATION"
+QUERY_TYPE_DESCRIPTIVE_QA = "DESCRIPTIVE_QA"
+
+
+def classify_query_intent(query: str) -> str:
+    """
+    Classify whether a clinical query is:
+    - VERIFICATION: hypothesis testing (SUPPORTED / REFUTED / INCONCLUSIVE verdict)
+    - DESCRIPTIVE_QA: open informational clinical Q&A (what, how, why, explain, side effects)
+    """
+    q = query.strip().lower()
+
+    descriptive_triggers = [
+        r"^what\s+(is|are|were|was|can|do|does)\b",
+        r"^how\s+(does|do|can|to|is|are)\b",
+        r"^why\s+(is|are|does|do)\b",
+        r"^explain\b",
+        r"^describe\b",
+        r"^compare\b",
+        r"^list\b",
+        r"\bmechanism of action\b",
+        r"\bguidelines for\b",
+        r"\bside effects of\b",
+        r"\bdosage of\b",
+        r"\boverview of\b",
+    ]
+    for pattern in descriptive_triggers:
+        if re.search(pattern, q):
+            # If asking direct head-to-head comparison with comparative direction, consider verification
+            if not any(k in q for k in ["more effective than", "better than", "superior to"]):
+                return QUERY_TYPE_DESCRIPTIVE_QA
+
+    return QUERY_TYPE_VERIFICATION
 
 
 def query_to_hypothesis(query: str) -> str:

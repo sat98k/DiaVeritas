@@ -202,6 +202,97 @@ def build_synthesis_prompt(
 
 
 # ---------------------------------------------------------------------------
+# Descriptive Clinical Q&A prompt (for open questions)
+# ---------------------------------------------------------------------------
+
+DESCRIPTIVE_QA_SYSTEM_PROMPT = """You are DiaVeritas, an evidence-based biomedical research assistant answering clinical questions about Type 2 Diabetes and cardiometabolic medicine.
+
+Your task is to synthesize a comprehensive, rigorous, and direct clinical answer based STRICTLY on the provided retrieved medical literature.
+
+CRITICAL RULES:
+1. Directly answer the question in the opening paragraph.
+2. Ground all key clinical assertions in the provided evidence, citing sources with [Author Year, Journal].
+3. Detail clinical mechanisms, pharmacodynamics, dosages, or side-effect profiles when discussed in the literature.
+4. Note any caveats, conflicting trial findings, or population differences reported across the studies.
+5. Do NOT fabricate clinical trials, PMID numbers, or statistics not in the evidence.
+6. End with: "This analysis is for research purposes only. It is not medical advice."
+"""
+
+
+def build_descriptive_qa_prompt(
+    question: str,
+    normalized_query: dict,
+    evidence_items: list,
+    max_evidence: int = 8,
+) -> str:
+    """
+    Build a rich synthesis prompt for open clinical Q&A (what, how, side effects, compare).
+
+    Args:
+        question: The clinical question.
+        normalized_query: Extracted concepts.
+        evidence_items: List of EvidenceItem objects.
+        max_evidence: Maximum evidence items to include in context.
+
+    Returns:
+        Formatted prompt string.
+    """
+    prompt_parts = []
+    prompt_parts.append("=" * 60)
+    prompt_parts.append("CLINICAL RESEARCH EVIDENCE SYNTHESIS")
+    prompt_parts.append("=" * 60)
+
+    prompt_parts.append(f"\nCLINICAL QUESTION:\n{question}")
+
+    # Normalized concepts
+    interventions = normalized_query.get("interventions", [])
+    outcomes = normalized_query.get("outcomes", [])
+    if interventions:
+        prompt_parts.append(f"Target Interventions: {', '.join(interventions)}")
+    if outcomes:
+        prompt_parts.append(f"Target Outcomes / Endpoints: {', '.join(outcomes)}")
+
+    prompt_parts.append("\n" + "-" * 60)
+    prompt_parts.append("RETRIEVED & VERIFIED BIOMEDICAL LITERATURE EVIDENCE:")
+    prompt_parts.append("-" * 60)
+
+    for i, item in enumerate(evidence_items[:max_evidence], 1):
+        d = item.to_dict() if hasattr(item, "to_dict") else item
+        title = d.get("title", "Unknown Title")
+        authors = d.get("authors", ["Not reported"])
+        year = d.get("year", "Unknown")
+        journal = d.get("journal", "Not reported")
+        study_type = d.get("study_type", "Not reported")
+        text = d.get("text", "")[:600]
+        grade_info = d.get("grade", {}) or {}
+        tier = grade_info.get("tier", "Standard")
+
+        first_author = authors[0].split(",")[0] if authors else "Unknown"
+        citation = f"[{first_author} {year}, {journal}]"
+
+        prompt_parts.append(f"\n[Source {i}] {citation}")
+        prompt_parts.append(f"  Title: {title}")
+        prompt_parts.append(f"  Study Design: {study_type} (GRADE Certainty: {tier})")
+        prompt_parts.append(f"  Evidence Passage: \"{text}...\"")
+
+    prompt_parts.append("\n" + "=" * 60)
+    prompt_parts.append("RESPONSE INSTRUCTIONS:")
+    prompt_parts.append(
+        "Synthesize a clear, authoritative, literature-grounded answer to the clinical question.\n"
+        "Structure your response with:\n"
+        "1. DIRECT CLINICAL SUMMARY — concise direct answer to the user's question\n"
+        "2. DETAILED MECHANISMS & CLINICAL EVIDENCE — deep dive into study findings, mechanisms, and metrics\n"
+        "3. CLINICAL NUANCES & POPULATION DIFFERENCES — subgroup variations, contraindications, or conflicting findings\n"
+        "4. SUMMARY OF CITED EVIDENCE BASE — brief table or bullet points summarizing the key cited trials\n\n"
+        "Cite every major assertion using [Author Year, Journal]. "
+        "Maintain objective, evidence-based academic tone."
+    )
+    prompt_parts.append("=" * 60)
+
+    return "\n".join(prompt_parts)
+
+
+# ---------------------------------------------------------------------------
 # Baseline RAG prompt (for comparison)
 # ---------------------------------------------------------------------------
 

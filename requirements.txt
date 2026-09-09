@@ -51,6 +51,7 @@ spacy>=3.8.0
 transformers>=4.40.0
 sentence-transformers>=3.0.0
 torch>=2.0.0                  # CPU build already installed; keep as-is
+torchvision>=0.18.0            # Required by transformers/sentence-transformers vision components
 
 # ---------------------------------------------------------------------------
 # Vector store

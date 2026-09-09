@@ -191,6 +191,15 @@
     color: #b45309;
 }
 
+.status-descriptive {
+    border: 2px solid #2563eb;
+    background: #eff6ff;
+}
+
+.status-descriptive .verdict-title {
+    color: #1d4ed8;
+}
+
 .verdict-label {
     font-size: 0.7rem;
     font-weight: 700;

@@ -78,6 +78,10 @@ SAMPLE_QUERIES = [
         "label": "📉 GLP-1 RA & Glycemic Control",
         "query": "Do GLP-1 receptor agonists improve glycemic control and reduce HbA1c in type 2 diabetes?",
     },
+    {
+        "label": "❓ Metformin Adverse Effects & MOA",
+        "query": "What are the common adverse effects and primary mechanism of action of metformin in type 2 diabetes?",
+    },
 ]
 
 # ---------------------------------------------------------------------------
@@ -204,25 +208,37 @@ def render_pipeline_steps(active_step: int):
 
 def render_verdict_banner(result):
     """Render the top summary metrics and verdict card."""
+    query_type = getattr(result, "query_type", "VERIFICATION")
+    is_descriptive = (query_type == "DESCRIPTIVE_QA")
+
     status = result.status
     status_dict = result.status_result_dict
     ev_sum = result.evidence_summary_dict
     conf_label = status_dict.get("confidence_label", "Moderate")
     conf_score = status_dict.get("confidence_score", 0.5)
 
-    badge_theme = {
-        "SUPPORTED": {"class": "status-supported", "icon": "✓", "desc": "Evidence strongly supports the proposition"},
-        "REFUTED": {"class": "status-refuted", "icon": "✗", "desc": "Evidence refutes or contradicts the proposition"},
-        "INCONCLUSIVE": {"class": "status-inconclusive", "icon": "⚖", "desc": "Literature shows conflicting or insufficient evidence"},
-    }.get(status, {"class": "status-inconclusive", "icon": "⚖", "desc": "Evaluation complete"})
+    if is_descriptive:
+        badge_theme = {
+            "class": "status-descriptive",
+            "icon": "📖",
+            "desc": "Evidence-grounded clinical answering & descriptive synthesis",
+            "title": "Clinical Q&A",
+            "label": "QUERY INTENT",
+        }
+    else:
+        badge_theme = {
+            "SUPPORTED": {"class": "status-supported", "icon": "✓", "desc": "Evidence strongly supports the proposition", "title": "SUPPORTED", "label": "EVIDENCE VERDICT"},
+            "REFUTED": {"class": "status-refuted", "icon": "✗", "desc": "Evidence refutes or contradicts the proposition", "title": "REFUTED", "label": "EVIDENCE VERDICT"},
+            "INCONCLUSIVE": {"class": "status-inconclusive", "icon": "⚖", "desc": "Literature shows conflicting or insufficient evidence", "title": "INCONCLUSIVE", "label": "EVIDENCE VERDICT"},
+        }.get(status, {"class": "status-inconclusive", "icon": "⚖", "desc": "Evaluation complete", "title": status, "label": "EVIDENCE VERDICT"})
 
     col1, col2, col3 = st.columns([1.5, 1.2, 1.3])
 
     with col1:
         st.markdown(f"""
         <div class="card-verdict {badge_theme['class']}">
-            <div class="verdict-label">EVIDENCE VERDICT</div>
-            <div class="verdict-title">{badge_theme['icon']} {status}</div>
+            <div class="verdict-label">{badge_theme['label']}</div>
+            <div class="verdict-title">{badge_theme['icon']} {badge_theme['title']}</div>
             <div class="verdict-desc">{badge_theme['desc']}</div>
         </div>
         """, unsafe_allow_html=True)
@@ -235,7 +251,7 @@ def render_verdict_banner(result):
             <div class="metric-progress-bar">
                 <div class="metric-progress-fill" style="width: {int(conf_score * 100)}%;"></div>
             </div>
-            <div class="metric-footer">Heuristic NLI agreement · Not clinically calibrated</div>
+            <div class="metric-footer">GRADE methodological weighting · Multi-factor calibration</div>
         </div>
         """, unsafe_allow_html=True)
 
@@ -267,6 +283,11 @@ def render_clinical_synthesis(result):
     # Synthesized Answer Card
     st.markdown('<div class="section-heading">Clinical Evidence Synthesis</div>', unsafe_allow_html=True)
     
+    if getattr(result, "ungrounded_claims", None):
+        st.warning(
+            f"⚠️ **Citation Grounding Notice:** {len(result.ungrounded_claims)} sentence(s) in the draft lacked direct passage citation and were flagged for clinical review."
+        )
+
     if result.answer:
         st.markdown(f"""
         <div class="synthesis-box">
@@ -281,7 +302,7 @@ def render_clinical_synthesis(result):
     # Status Rationale
     status_dict = result.status_result_dict
     if status_dict.get("rationale"):
-        with st.expander("📌 Methodological Rationale for Verdict", expanded=False):
+        with st.expander("📌 Methodological Rationale for Verdict & Certainty", expanded=False):
             st.markdown(f"**Pipeline Verdict Explanation:**\n\n{status_dict['rationale']}")
 
     st.markdown('<div class="section-heading" style="margin-top: 2rem;">Retrieved Evidence Passages & Study Context</div>', unsafe_allow_html=True)
@@ -327,16 +348,23 @@ def _render_evidence_card(item: dict, card_type: str):
     claim = item.get("claim", {})
     nli = item.get("nli", {})
     ctx = item.get("context_analysis")
+    grade = item.get("grade")
 
     nli_label = nli.get("label", "NEUTRAL")
     nli_conf = nli.get("confidence", 0.0)
 
     header = f"**{title[:90]}** ({year}, {journal})"
     with st.expander(header, expanded=False):
-        cols = st.columns(3)
+        cols = st.columns(4 if grade else 3)
         cols[0].markdown(f"**Section:** {section}")
         cols[1].markdown(f"**Study Type:** {study_type}")
         cols[2].markdown(f"**DeBERTa NLI:** `{nli_label}` ({nli_conf:.1%})")
+        if grade:
+            grade_tier = grade.get("grade_certainty", "MODERATE")
+            grade_weight = grade.get("weight", 1.0)
+            n_sample = grade.get("sample_size")
+            sample_str = f" · N={n_sample}" if n_sample else ""
+            cols[3].markdown(f"**GRADE:** `{grade_tier}` (wt: {grade_weight}{sample_str})")
 
         st.markdown("**Evidence Passage:**")
         st.markdown(f"> *{text}*")
@@ -358,7 +386,9 @@ def render_reasoning_trail(result):
 
     # 1. PICO Query
     with st.expander("Step 1 · Query Normalization & PICO Entity Extraction", expanded=True):
+        q_type = getattr(result, "query_type", "VERIFICATION")
         st.markdown(f"**Original Clinical Question:** `{result.question}`")
+        st.markdown(f"**Classified Query Intent:** `{q_type}`")
         nq = result.normalized_query
         if nq:
             c1, c2, c3 = st.columns(3)
@@ -402,15 +432,22 @@ def render_reasoning_trail(result):
         c3.metric("Neutral", counts.get("NEUTRAL", 0))
         c4.metric("Avg Confidence", f"{nli_sum.get('avg_confidence', 0):.1%}")
 
-    # 5. Status Computation Formula
-    with st.expander("Step 5 · Evidence Synthesis Calibration Formula", expanded=False):
+    # 5. Status Computation Formula & GRADE Weighting
+    with st.expander("Step 5 · Evidence Synthesis Calibration & GRADE Weighting", expanded=False):
         s = result.status_result_dict
         st.markdown(f"""
-        - **Entailment Ratio:** `{s.get('entailment_ratio', 0):.1%}` (Entailments / Non-neutral claims)
-        - **Contradiction Ratio:** `{s.get('contradiction_ratio', 0):.1%}` (Contradictions / Non-neutral claims)
         - **Calculated Status:** `{s.get('status', 'INCONCLUSIVE')}`
         - **Confidence Score:** `{s.get('confidence_score', 0):.2f}` ({s.get('confidence_label', 'Low')})
+        - **Entailment Ratio:** `{s.get('entailment_ratio', 0):.1%}`
+        - **Contradiction Ratio:** `{s.get('contradiction_ratio', 0):.1%}`
+        - **Weighted Support (GRADE):** `{s.get('weighted_support', 0.0):.2f}`
+        - **Weighted Contradiction (GRADE):** `{s.get('weighted_contradiction', 0.0):.2f}`
         """)
+        breakdown = s.get("confidence_breakdown", {})
+        if breakdown:
+            st.markdown("**7-Factor Confidence Calibration Breakdown:**")
+            for factor, val in breakdown.items():
+                st.markdown(f"- `{factor}`: {val:.3f}")
 
 
 # ---------------------------------------------------------------------------
@@ -480,7 +517,7 @@ def main():
 
     # Quick sample queries
     st.markdown('<div class="quick-query-header">Sample Clinical Questions (Click to autofill):</div>', unsafe_allow_html=True)
-    q_cols = st.columns(4)
+    q_cols = st.columns(len(SAMPLE_QUERIES))
     for i, sample in enumerate(SAMPLE_QUERIES):
         with q_cols[i]:
             if st.button(sample["label"], key=f"btn_sample_{i}", use_container_width=True):
