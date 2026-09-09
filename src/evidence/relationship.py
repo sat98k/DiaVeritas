@@ -45,6 +45,7 @@ class EvidenceItem:
     relationship: str                         # Supports | Contradicts | Contextual Difference | Neutral
     context_analysis: Optional[ContextComparisonResult] = None
     grade: Optional[GRADEAssessment] = None
+    comparative_rationale: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         d = {
@@ -63,6 +64,7 @@ class EvidenceItem:
             "relationship": self.relationship,
             "context_analysis": self.context_analysis.to_dict() if self.context_analysis else None,
             "grade": self.grade.to_dict() if self.grade else None,
+            "comparative_rationale": self.comparative_rationale,
         }
         return d
 
@@ -74,22 +76,34 @@ class EvidenceItem:
 def derive_relationship(
     nli_result: NLIResult,
     context_analysis: Optional[ContextComparisonResult] = None,
+    claim: Optional[StructuredClaim] = None,
+    query_context: Optional[Dict[str, Any]] = None,
 ) -> str:
     """
     Derive a human-readable relationship label for one evidence item.
 
     Rules:
     1. ENTAILMENT + high confidence → "Supports"
-    2. CONTRADICTION + contextual differences detected → "Contextual Difference"
-    3. CONTRADICTION without contextual context → "Contradicts"
-    4. NEUTRAL → "Neutral"
-    5. Low-confidence ENTAILMENT/CONTRADICTION → downgrade to "Neutral"
+       - If claim and query_context provided, verify intervention is not mismatched.
+    2. CONTRADICTION + high confidence:
+       - If context_analysis and context_analysis.conflict_type == "CONTEXTUAL" → "Contextual Difference"
+       - Else → "Contradicts"
+    3. NEUTRAL → "Neutral"
+    4. Low-confidence ENTAILMENT/CONTRADICTION → downgrade to "Neutral"
     """
     label = nli_result.label
     conf = nli_result.confidence
 
     if label == "ENTAILMENT":
         if conf >= settings.nli_entailment_threshold:
+            # Safeguard: if claim and query_context provided, check intervention mismatch
+            if claim and query_context:
+                target_ints = query_context.get("expanded_interventions") or query_context.get("interventions", [])
+                if target_ints:
+                    c_int = claim.intervention.lower()
+                    c_text = claim.raw_text.lower()
+                    if not any(ti in c_int or ti in c_text for ti in target_ints):
+                        return "Neutral"
             return "Supports"
         else:
             return "Neutral"  # Low-confidence entailment treated as neutral
@@ -116,6 +130,7 @@ def build_evidence_items(
     nli_results: List[NLIResult],
     context_analyses: List[ContextComparisonResult],
     grades: Optional[List[GRADEAssessment]] = None,
+    query_context: Optional[Dict[str, Any]] = None,
 ) -> List[EvidenceItem]:
     """
     Build a list of EvidenceItems by combining all analysis components.
@@ -127,10 +142,30 @@ def build_evidence_items(
         context_analyses: Context comparisons for contradiction items.
                           Keyed by chunk_id.
         grades: GRADE assessments for each chunk (same order).
+        query_context: Optional query normalization context, containing comparative_info.
 
     Returns:
         List of EvidenceItem objects in the same order as chunks.
     """
+    # Check for comparative query context
+    comp_info = None
+    if query_context and query_context.get("comparative_info", {}).get("is_comparative"):
+        from src.claims.comparative_gate import ComparativeQueryInfo, evaluate_comparative_chunk
+        c_dict = query_context["comparative_info"]
+        comp_info = ComparativeQueryInfo(
+            is_comparative=True,
+            comparative_type=c_dict.get("comparative_type", "NON_COMPARATIVE"),
+            intervention_a=c_dict.get("intervention_a", ""),
+            intervention_b=c_dict.get("intervention_b", ""),
+            intervention_a_terms=c_dict.get("intervention_a_terms", []),
+            intervention_b_terms=c_dict.get("intervention_b_terms", []),
+            target_outcome=c_dict.get("target_outcome", ""),
+            target_outcome_terms=c_dict.get("target_outcome_terms", []),
+            population=c_dict.get("population", ""),
+            claimed_superior=c_dict.get("claimed_superior"),
+            raw_query=c_dict.get("raw_query", ""),
+        )
+
     # Map context analyses by claim_b_id for quick lookup
     context_map: Dict[str, ContextComparisonResult] = {
         ca.claim_b_id: ca for ca in context_analyses
@@ -141,7 +176,17 @@ def build_evidence_items(
     items: List[EvidenceItem] = []
     for chunk, claim, nli, gr in zip(chunks, claims, nli_results, grade_list):
         context_analysis = context_map.get(chunk.chunk_id)
-        relationship = derive_relationship(nli, context_analysis)
+        relationship = derive_relationship(nli, context_analysis, claim=claim, query_context=query_context)
+        comp_rationale = None
+
+        if comp_info and comp_info.is_comparative:
+            relationship, comp_rationale = evaluate_comparative_chunk(
+                chunk=chunk,
+                claim=claim,
+                comp_info=comp_info,
+                nli_label=nli.label,
+                nli_confidence=nli.confidence,
+            )
 
         items.append(EvidenceItem(
             chunk=chunk,
@@ -150,6 +195,7 @@ def build_evidence_items(
             relationship=relationship,
             context_analysis=context_analysis,
             grade=gr,
+            comparative_rationale=comp_rationale,
         ))
 
     return items

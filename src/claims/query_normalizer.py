@@ -40,6 +40,7 @@ from src.preprocessing.entity_extractor import (
     _DRUG_KEYWORDS, _DISEASE_KEYWORDS, _BIOMARKER_KEYWORDS, _OUTCOME_KEYWORDS,
     _keyword_match,
 )
+from src.claims.comparative_gate import detect_comparative_query
 
 
 # ---------------------------------------------------------------------------
@@ -77,6 +78,12 @@ _OUTCOME_NORMALIZATIONS = {
     "remission": "disease remission",
     "control": "glycemic control (HbA1c/glucose)",
     "glycemic control": "glycemic control (HbA1c/glucose)",
+    "muscle mass": "muscle mass",
+    "skeletal muscle mass": "muscle mass",
+    "muscle strength": "muscle mass",
+    "lean mass": "muscle mass",
+    "lean body mass": "muscle mass",
+    "sarcopenia": "muscle mass",
 }
 
 _LIFESTYLE_KEYWORDS = {
@@ -255,6 +262,11 @@ OUTCOME_SYNONYM_CLUSTERS: Dict[str, List[str]] = {
     "hypoglycemia": [
         "hypoglycemia", "hypoglycaemia", "hypoglycemic events", "low blood sugar",
     ],
+    "muscle_mass": [
+        "muscle mass", "skeletal muscle mass", "lean mass", "lean body mass",
+        "muscle strength", "strength", "sarcopenia", "muscle cross-sectional area",
+        "fat-free mass",
+    ],
 }
 
 DRUG_BRAND_MAP: Dict[str, List[str]] = {
@@ -326,6 +338,44 @@ def expand_interventions(interventions: List[str], query_text: str = "") -> List
             expanded.add(drug_name)
             for b in brands:
                 expanded.add(b)
+
+    # Lifestyle and exercise expansion (Priority 1: EXER-010 fix)
+    lifestyle_expansions = {
+        "exercise": [
+            "exercise", "physical activity", "exercise/physical activity", "resistance training",
+            "aerobic exercise", "aerobic training", "strength training", "walking", "endurance training", "hiit"
+        ],
+        "physical activity": [
+            "exercise", "physical activity", "exercise/physical activity", "resistance training",
+            "aerobic exercise", "aerobic training", "strength training", "walking"
+        ],
+        "exercise/physical activity": [
+            "exercise", "physical activity", "exercise/physical activity", "resistance training",
+            "aerobic exercise", "aerobic training", "strength training", "walking"
+        ],
+        "resistance training": [
+            "resistance training", "strength training", "exercise", "physical activity", "exercise/physical activity"
+        ],
+        "aerobic exercise": [
+            "aerobic exercise", "aerobic training", "exercise", "physical activity", "exercise/physical activity"
+        ],
+        "diet": [
+            "diet", "dietary intervention", "nutrition", "lifestyle intervention"
+        ],
+        "dietary intervention": [
+            "diet", "dietary intervention", "nutrition", "lifestyle intervention"
+        ],
+        "lifestyle": [
+            "lifestyle", "lifestyle intervention", "exercise", "diet", "physical activity"
+        ],
+        "lifestyle intervention": [
+            "lifestyle", "lifestyle intervention", "exercise", "diet", "physical activity"
+        ],
+    }
+    for kw, terms in lifestyle_expansions.items():
+        if any(kw in int_item for int_item in list(expanded)) or re.search(r"\b" + re.escape(kw) + r"\b", combined_check):
+            for t in terms:
+                expanded.add(t)
 
     return sorted(list(expanded))
 
@@ -477,6 +527,9 @@ def normalize_query(query: str) -> Dict[str, Any]:
         "hypothesis_text": hypothesis_text,
     }
 
+    comp_info = detect_comparative_query(query, result)
+    result["comparative_info"] = comp_info.to_dict()
+
     logger.debug(f"Query normalized ({query_type}): {result}")
     return result
 
@@ -537,6 +590,31 @@ def query_to_hypothesis(query: str) -> str:
     q_no_q = q.rstrip("?").strip()
     # Strip parenthetical examples (e.g., "(like walking)", "(e.g., metformin)")
     q_no_q = re.sub(r"\s*\([^)]*\)", "", q_no_q).strip()
+
+    # Pattern: Which is better for [outcome]...: [A] or [B]?
+    m_which = re.match(
+        r"^which\s+is\s+(?:better|more\s+effective|superior|preferred)\s+(?:for\s+([^\:\?]+?))?(?::|\s+in\s+([^\:\?]+?):?|\s+between|\s+among)\s*([A-Za-z0-9\-\s]+?)\s+(?:or|vs\.?|versus)\s+([A-Za-z0-9\-\s]+?)(?:\s+in\s+([^\:\?]+?))?$",
+        q_no_q,
+        re.IGNORECASE,
+    )
+    if m_which:
+        out1, pop1, int_a, int_b, pop2 = m_which.groups()
+        target_out = out1 or "treatment"
+        pop = pop1 or pop2 or ""
+        pop_str = f" in {pop.strip()}" if pop else ""
+        return f"{int_a.strip().capitalize()} is more effective than {int_b.strip()} for {target_out.strip()}{pop_str}."
+
+    # Pattern: Which is better between [A] and [B] for [outcome]?
+    m_which_between = re.match(
+        r"^which\s+is\s+(?:better|more\s+effective|superior|preferred)\s+(?:between|among)\s+([A-Za-z0-9\-\s]+?)\s+and\s+([A-Za-z0-9\-\s]+?)(?:\s+for\s+([^\:\?]+?))?(?:\s+in\s+([^\:\?]+?))?$",
+        q_no_q,
+        re.IGNORECASE,
+    )
+    if m_which_between:
+        int_a, int_b, target_out, pop = m_which_between.groups()
+        out_str = f" for {target_out.strip()}" if target_out else ""
+        pop_str = f" in {pop.strip()}" if pop else ""
+        return f"{int_a.strip().capitalize()} is more effective than {int_b.strip()}{out_str}{pop_str}."
 
     # Pattern: Does X improve with Y? -> Y improves X.
     m_improve = re.match(r"^does\s+(.+?)\s+improve\s+with\s+(.+)$", q_no_q, re.IGNORECASE)
@@ -626,3 +704,55 @@ def query_to_hypothesis(query: str) -> str:
 
     # Fallback: capitalize first letter and add period
     return f"{q_no_q[0].upper() + q_no_q[1:]}."
+
+
+def extract_query_direction(query: str) -> str:
+    """
+    Extract the asserted effect direction from an interrogative or declarative query.
+    Returns 'Reduction', 'Increase', 'No change', or 'Not reported'.
+    """
+    q = query.lower()
+
+    # Check for reduction/decrease terms
+    reduction_cues = [
+        "reduce", "reduces", "reducing", "reduction",
+        "decrease", "decreases", "decreasing",
+        "lower", "lowers", "lowering",
+        "prevent", "prevents", "prevention",
+        "lessen", "drop", "decline", "loss", "fall",
+    ]
+    # Check for increase/elevation terms
+    increase_cues = [
+        "increase", "increases", "increasing",
+        "elevate", "elevates", "elevating",
+        "raise", "raises", "raising",
+        "cause", "causes", "causing",
+        "worsen", "worsens", "worsening",
+        "gain", "grow", "growth", "higher", "rise",
+    ]
+    # Check for no change
+    no_change_cues = [
+        "no change", "no effect", "no difference", "neutral", "maintain", "stabilize",
+    ]
+
+    has_reduction = any(re.search(r"\b" + re.escape(w) + r"\b", q) for w in reduction_cues)
+    has_increase = any(re.search(r"\b" + re.escape(w) + r"\b", q) for w in increase_cues)
+    has_no_change = any(re.search(r"\b" + re.escape(w) + r"\b", q) for w in no_change_cues)
+
+    if has_reduction and not has_increase:
+        return "Reduction"
+    elif has_increase and not has_reduction:
+        return "Increase"
+    elif has_no_change:
+        return "No change"
+
+    # If "improve" is present:
+    if re.search(r"\b(improve|improves|improving|improvement|better)\b", q):
+        # Improving muscle mass, strength, survival, function -> Increase
+        if any(w in q for w in ["muscle", "strength", "survival", "lean mass", "function", "qol", "quality of life"]):
+            return "Increase"
+        # Improving glycemic control, HbA1c, glucose, blood pressure, mortality, events, risk -> Reduction
+        return "Reduction"
+
+    return "Not reported"
+

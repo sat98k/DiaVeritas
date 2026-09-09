@@ -139,16 +139,20 @@ _OUTCOME_KEYWORDS = {
     "glycemic control", "glycaemic control", "weight loss", "weight reduction",
     "blood pressure reduction", "hypoglycemic event", "hypoglycaemia", "adverse event",
     "adverse effect", "safety", "tolerability", "quality of life",
+    "muscle mass", "muscle strength", "skeletal muscle mass", "lean mass", "lean body mass",
+    "sarcopenia", "strength",
 }
 
 
 def _keyword_match(text_lower: str, keyword_set) -> List[str]:
-    """Find all keywords from a set that appear in the text."""
-    found = []
+    """Find all keywords from a set that appear in the text, ordered by first appearance."""
+    matches = []
     for kw in keyword_set:
-        if re.search(r"\b" + re.escape(kw) + r"\b", text_lower):
-            found.append(kw)
-    return found
+        m = re.search(r"\b" + re.escape(kw) + r"\b", text_lower)
+        if m:
+            matches.append((m.start(), kw))
+    matches.sort(key=lambda x: x[0])
+    return [kw for _, kw in matches]
 
 
 # ---------------------------------------------------------------------------

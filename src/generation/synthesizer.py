@@ -33,7 +33,7 @@ from dataclasses import dataclass, field
 from loguru import logger
 
 from src.config import settings
-from src.claims.query_normalizer import normalize_query
+from src.claims.query_normalizer import normalize_query, extract_query_direction
 from src.claims.claim_extractor import extract_claims, StructuredClaim
 from src.claims.claim_grouper import ClaimGrouper, ClaimGroup
 from src.nli.nli_classifier import (
@@ -73,6 +73,7 @@ class DiaVeritasResult:
     # Analysis
     claims: List[StructuredClaim] = field(default_factory=list)
     claim_groups: List[Dict[str, Any]] = field(default_factory=list)
+    evidence_items: List[Any] = field(default_factory=list)
     nli_summary: Dict[str, Any] = field(default_factory=dict)
     evidence_summary_dict: Dict[str, Any] = field(default_factory=dict)
     status: str = "INCONCLUSIVE"
@@ -290,10 +291,10 @@ class Synthesizer:
                 chunk_id="query_ref",
                 paper_id="query",
                 section="Query",
-                intervention=target_ints[0] if target_ints else "Target Intervention",
-                outcome=target_outs[0] if target_outs else "Target Outcome",
+                intervention=target_ints[0] if target_ints else "Not reported",
+                outcome=target_outs[0] if target_outs else "Not reported",
                 population=target_pop[0] if target_pop else "Type 2 Diabetes",
-                direction="Reduction" if any(w in question.lower() for w in ["reduce", "lower", "decrease", "prevent"]) else "Increase",
+                direction=extract_query_direction(question),
                 raw_text=question,
             )
             context_analyses = analyze_contradictions(claims, nli_results, reference_claim=ref_claim)
@@ -302,8 +303,9 @@ class Synthesizer:
             logger.info("[Step 7] Grading evidence certainty (GRADE/ADA) and deriving relationships...")
             grades = [grade_grader.grade_evidence(c, cl) for c, cl in zip(chunks, claims)]
             evidence_items = build_evidence_items(
-                chunks, claims, nli_results, context_analyses, grades=grades
+                chunks, claims, nli_results, context_analyses, grades=grades, query_context=result.normalized_query
             )
+            result.evidence_items = evidence_items
             ev_summary = summarize_evidence_relationships(evidence_items)
             result.evidence_summary_dict = ev_summary.to_dict()
 

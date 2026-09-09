@@ -357,7 +357,11 @@ def _compute_confidence(
         avg_grade_norm = 0.5
 
     # 4. Number of independent studies (distinct paper_ids)
-    distinct_papers = len(_distinct_study_ids(all_items))
+    # Evaluated from decisive evidence (supporting + contradicting, or contextual)
+    decisive_items = summary.supporting + summary.contradicting
+    if not decisive_items and summary.contextual:
+        decisive_items = summary.contextual
+    distinct_papers = len(_distinct_study_ids(decisive_items)) if decisive_items else 0
     if distinct_papers <= 1:
         study_count_factor = 0.25
     elif distinct_papers == 2:
