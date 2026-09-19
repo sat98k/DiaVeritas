@@ -33,7 +33,7 @@ from dataclasses import dataclass, field
 from loguru import logger
 
 from src.config import settings
-from src.claims.query_normalizer import normalize_query
+from src.claims.query_normalizer import normalize_query, extract_query_direction
 from src.claims.claim_extractor import extract_claims, StructuredClaim
 from src.claims.claim_grouper import ClaimGrouper, ClaimGroup
 from src.nli.nli_classifier import (
@@ -73,6 +73,7 @@ class DiaVeritasResult:
     # Analysis
     claims: List[StructuredClaim] = field(default_factory=list)
     claim_groups: List[Dict[str, Any]] = field(default_factory=list)
+    evidence_items: List[Any] = field(default_factory=list)
     nli_summary: Dict[str, Any] = field(default_factory=dict)
     evidence_summary_dict: Dict[str, Any] = field(default_factory=dict)
     status: str = "INCONCLUSIVE"
@@ -82,6 +83,7 @@ class DiaVeritasResult:
     answer: str = ""
     answer_error: str = ""
     ungrounded_claims: List[str] = field(default_factory=list)
+    stripped_claims: List[str] = field(default_factory=list)
 
     # Metadata
     pipeline_mode: str = "diaveritias"   # "diaveritias" | "baseline"
@@ -104,6 +106,7 @@ class DiaVeritasResult:
             "answer": self.answer,
             "answer_error": self.answer_error,
             "ungrounded_claims": self.ungrounded_claims,
+            "stripped_claims": self.stripped_claims,
             "pipeline_mode": self.pipeline_mode,
             "latency_seconds": self.latency_seconds,
             "models_used": self.models_used,
@@ -282,14 +285,16 @@ class Synthesizer:
             target_ints = result.normalized_query.get("interventions", [])
             target_outs = result.normalized_query.get("outcomes", [])
             target_pop = result.normalized_query.get("population", [])
+            if not target_pop and result.normalized_query.get("disease"):
+                target_pop = result.normalized_query.get("disease")
             ref_claim = StructuredClaim(
                 chunk_id="query_ref",
                 paper_id="query",
                 section="Query",
-                intervention=target_ints[0] if target_ints else "Target Intervention",
-                outcome=target_outs[0] if target_outs else "Target Outcome",
-                population=target_pop[0] if target_pop else "Not reported",
-                direction="Reduction" if any(w in question.lower() for w in ["reduce", "lower", "decrease", "prevent"]) else "Increase",
+                intervention=target_ints[0] if target_ints else "Not reported",
+                outcome=target_outs[0] if target_outs else "Not reported",
+                population=target_pop[0] if target_pop else "Type 2 Diabetes",
+                direction=extract_query_direction(question),
                 raw_text=question,
             )
             context_analyses = analyze_contradictions(claims, nli_results, reference_claim=ref_claim)
@@ -298,8 +303,9 @@ class Synthesizer:
             logger.info("[Step 7] Grading evidence certainty (GRADE/ADA) and deriving relationships...")
             grades = [grade_grader.grade_evidence(c, cl) for c, cl in zip(chunks, claims)]
             evidence_items = build_evidence_items(
-                chunks, claims, nli_results, context_analyses, grades=grades
+                chunks, claims, nli_results, context_analyses, grades=grades, query_context=result.normalized_query
             )
+            result.evidence_items = evidence_items
             ev_summary = summarize_evidence_relationships(evidence_items)
             result.evidence_summary_dict = ev_summary.to_dict()
 
@@ -350,8 +356,11 @@ class Synthesizer:
                 logger.warning("No LLM client configured. Generating fallback answer.")
                 result.answer = _fallback_answer(result, evidence_items)
 
-            # Step 10: Grounding check (FR-17.2)
-            result.ungrounded_claims = _verify_grounding(result.answer, evidence_items)
+            # Step 10: Grounding check & strict enforcement (FR-17.2, NFR-5.2)
+            clean_answer, stripped = enforce_strict_grounding(result.answer, evidence_items)
+            result.answer = clean_answer
+            result.ungrounded_claims = []
+            result.stripped_claims = stripped
 
         except Exception as e:
             logger.exception(f"Pipeline error: {e}")
@@ -414,42 +423,152 @@ class Synthesizer:
 
 
 # ---------------------------------------------------------------------------
-# Sentence-level Grounding Verification (FR-17.2)
+# Strict Sentence-level Grounding Enforcement (FR-17.2, NFR-5.2)
 # ---------------------------------------------------------------------------
 
-def _verify_grounding(answer: str, evidence_items: List[EvidenceItem]) -> List[str]:
+def _find_cited_chunks(sentence: str, evidence_items: List[EvidenceItem]) -> List[Chunk]:
+    """Find which evidence chunk(s) are referenced by citation markers in the sentence."""
+    cited = []
+    s_lower = sentence.lower()
+
+    for idx, item in enumerate(evidence_items, 1):
+        chunk = item.chunk
+        # 1. Match [Source N], [Passage N], or [N]
+        if f"source {idx}" in s_lower or f"passage {idx}" in s_lower or f"[{idx}]" in sentence:
+            cited.append(chunk)
+            continue
+
+        # 2. Match PMID / paper_id
+        if chunk.paper_id and chunk.paper_id != "Not reported" and chunk.paper_id.lower() in s_lower:
+            cited.append(chunk)
+            continue
+
+        # 3. Match Author + Year (e.g. "Smith 2022" or "Smith et al. 2022")
+        if chunk.authors and chunk.year and chunk.year != "?":
+            first_author = chunk.authors[0].split()[0].replace(",", "").lower()
+            if len(first_author) >= 3 and first_author in s_lower and str(chunk.year) in s_lower:
+                cited.append(chunk)
+                continue
+
+        # 4. Match Title substring if in brackets
+        if chunk.title and len(chunk.title) >= 10:
+            title_stem = chunk.title[:30].lower()
+            if title_stem in s_lower:
+                cited.append(chunk)
+                continue
+
+    return cited
+
+
+def _passage_supports_sentence(sentence: str, chunk: Chunk) -> bool:
+    """Check if a specific evidence chunk semantically/lexically supports a sentence."""
+    skip_words = {
+        "pmid", "doi", "trial", "study", "studies", "journal",
+        "author", "source", "passage", "table", "figure",
+    }
+    s_words = {
+        w for w in re.findall(r"\b[a-z]{4,}\b", sentence.lower())
+        if w not in skip_words
+    }
+    if not s_words:
+        return True
+
+    chunk_words = {
+        w for w in re.findall(r"\b[a-z]{4,}\b", chunk.text.lower())
+        if w not in skip_words
+    }
+
+    overlap = s_words & chunk_words
+    return len(overlap) >= 3 or (len(s_words) > 0 and (len(overlap) / len(s_words)) >= 0.35)
+
+
+def enforce_strict_grounding(answer: str, evidence_items: List[EvidenceItem]) -> Tuple[str, List[str]]:
     """
-    Check sentence-level citation grounding in the generated answer (FR-17.2).
-    Flags substantive clinical sentences lacking citation or passage correspondence.
+    Enforce strict sentence-level citation grounding (NFR-5.2, FR-17.2).
+    Checks every sentence in the synthesized answer. Verifies that sentences with
+    citations are actually supported by the specific cited passage(s). Sentences with
+    unsupported citations or lacking evidence support are programmatically stripped.
+
+    Returns:
+        Tuple of (clean_grounded_answer, list_of_removed_ungrounded_sentences)
     """
     if not answer or "No relevant evidence" in answer or "Pipeline error" in answer:
-        return []
+        return answer, []
 
-    sentences = re.split(r"(?<=[.!?])\s+", answer)
-    ungrounded = []
+    paragraphs = answer.split("\n\n")
+    citation_pat = re.compile(r"\[.+?\d{4}.*?\]|\[Source \d+\]|\([A-Za-z]+ et al\.,?\s*\d{4}\)|\[\d+\]")
 
-    # Citations pattern e.g. [Smith 2021, Diabetes Care], [Source 1], (Smith et al., 2020)
-    citation_pat = re.compile(r"\[.+?\d{4}.*?\]|\[Source \d+\]|\([A-Za-z]+ et al\.,?\s*\d{4}\)")
+    cleaned_paragraphs = []
+    ungrounded_sentences = []
 
-    for s in sentences:
-        s_clean = s.strip()
-        # Skip header lines, bullet markers, disclaimers
-        if len(s_clean) < 35 or s_clean.startswith(("#", "-", "*", "1.", "2.", "3.", "4.", "5.")):
-            continue
-        if any(skip in s_clean.lower() for skip in ["medical advice", "for research purposes", "clinical question:", "summary:"]):
+    for para in paragraphs:
+        # If paragraph is a markdown header, list, table, or disclaimer, preserve it
+        if para.strip().startswith(("#", "|", "*This analysis is for research", "*(No external LLM", "**Evidence Status", "**Evidence Analysis", "**Verdict Rationale", "**Supporting Evidence", "**Contradicting Evidence")):
+            cleaned_paragraphs.append(para)
             continue
 
-        # Check if sentence has explicit citation
-        if not citation_pat.search(s_clean):
-            # Check if sentence has lexical overlap with at least one evidence chunk
-            s_words = set(re.findall(r"\b\w{4,}\b", s_clean.lower()))
-            has_overlap = any(
-                len(s_words & set(re.findall(r"\b\w{4,}\b", item.chunk.text.lower()))) >= 4
+        sentences = re.split(r"(?<=[.!?])\s+", para)
+        valid_sentences = []
+
+        for s in sentences:
+            s_clean = s.strip()
+            # Skip short fragments, bullet markers, disclaimers
+            if len(s_clean) < 35 or s_clean.startswith(("-", "*", "1.", "2.", "3.", "4.", "5.")):
+                valid_sentences.append(s)
+                continue
+            if any(skip in s_clean.lower() for skip in ["medical advice", "for research purposes", "clinical question:", "summary:"]):
+                valid_sentences.append(s)
+                continue
+
+            # Check citation presence and verify cited passage support
+            if citation_pat.search(s_clean):
+                cited_chunks = _find_cited_chunks(s_clean, evidence_items)
+                if cited_chunks:
+                    is_supported_by_cited = any(
+                        _passage_supports_sentence(s_clean, c) for c in cited_chunks
+                    )
+                    if is_supported_by_cited:
+                        valid_sentences.append(s)
+                        continue
+                    else:
+                        # Citation is attached, but the cited source does not support this claim
+                        ungrounded_sentences.append(s_clean)
+                        logger.info(f"Stripped citation-misattributed sentence: '{s_clean[:80]}...'")
+                        continue
+                else:
+                    # Citation pattern found but specific chunk not matched: check general evidence pool
+                    has_general_support = any(
+                        _passage_supports_sentence(s_clean, item.chunk)
+                        for item in evidence_items
+                    )
+                    if has_general_support:
+                        valid_sentences.append(s)
+                    else:
+                        ungrounded_sentences.append(s_clean)
+                        logger.info(f"Stripped ungrounded cited sentence: '{s_clean[:80]}...'")
+                    continue
+
+            # Sentence without citation marker: check lexical grounding in evidence chunks
+            has_general_overlap = any(
+                _passage_supports_sentence(s_clean, item.chunk)
                 for item in evidence_items
             )
-            if not has_overlap:
-                ungrounded.append(s_clean)
+            if has_general_overlap:
+                valid_sentences.append(s)
+            else:
+                ungrounded_sentences.append(s_clean)
+                logger.info(f"Stripped ungrounded clinical sentence: '{s_clean[:80]}...'")
 
+        if valid_sentences:
+            cleaned_paragraphs.append(" ".join(valid_sentences))
+
+    filtered_answer = "\n\n".join(cleaned_paragraphs).strip()
+    return filtered_answer, ungrounded_sentences
+
+
+def _verify_grounding(answer: str, evidence_items: List[EvidenceItem]) -> List[str]:
+    """Check sentence-level citation grounding in the generated answer (FR-17.2)."""
+    _, ungrounded = enforce_strict_grounding(answer, evidence_items)
     return ungrounded
 
 

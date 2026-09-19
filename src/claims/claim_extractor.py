@@ -171,18 +171,52 @@ def extract_claim_heuristic(chunk: Chunk) -> StructuredClaim:
     """
     text_lower = chunk.text.lower()
 
-    # Intervention: first drug entity
-    drugs = chunk.entities.get("drugs", [])
-    intervention = drugs[0] if drugs else "Not reported"
+    entities = chunk.entities
+    if not entities:
+        from src.preprocessing.entity_extractor import extract_entities
+        entities = extract_entities(chunk.text)
+
+    # Intervention: first drug entity, or non-pharmacological/exercise terms
+    drugs = entities.get("drugs", [])
+    if drugs:
+        intervention = drugs[0]
+    else:
+        if "resistance training" in text_lower or "strength training" in text_lower:
+            intervention = "resistance training"
+        elif "aerobic exercise" in text_lower or "aerobic training" in text_lower:
+            intervention = "aerobic exercise"
+        elif "exercise" in text_lower or "physical activity" in text_lower:
+            intervention = "exercise"
+        elif "walking" in text_lower:
+            intervention = "walking"
+        elif "diet" in text_lower or "dietary" in text_lower:
+            intervention = "dietary intervention"
+        elif "lifestyle" in text_lower:
+            intervention = "lifestyle intervention"
+        else:
+            intervention = "Not reported"
 
     # Outcome: first outcome entity
-    outcomes = chunk.entities.get("outcomes", [])
+    outcomes = entities.get("outcomes", [])
     outcome = outcomes[0] if outcomes else "Not reported"
 
     # Biomarker as fallback outcome
     if outcome == "Not reported":
-        biomarkers = chunk.entities.get("biomarkers", [])
+        biomarkers = entities.get("biomarkers", [])
         outcome = biomarkers[0] if biomarkers else "Not reported"
+
+    # Fallback to key clinical outcome keywords if still Not reported
+    if outcome == "Not reported":
+        if "muscle mass" in text_lower or "muscle strength" in text_lower or "lean body mass" in text_lower:
+            outcome = "muscle mass"
+        elif "sarcopenia" in text_lower:
+            outcome = "sarcopenia"
+        elif "hba1c" in text_lower or "glycated hemoglobin" in text_lower:
+            outcome = "glycemic control (HbA1c/glucose)"
+        elif "mortality" in text_lower:
+            outcome = "mortality"
+        elif "heart failure" in text_lower:
+            outcome = "heart failure"
 
     # Direction heuristic
     direction = "Unclear"
@@ -194,7 +228,7 @@ def extract_claim_heuristic(chunk: Chunk) -> StructuredClaim:
         direction = "Increase"
 
     # Population from diseases
-    diseases = chunk.entities.get("diseases", [])
+    diseases = entities.get("diseases", [])
     population = diseases[0] if diseases else "Not reported"
 
     return StructuredClaim(

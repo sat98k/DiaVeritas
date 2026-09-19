@@ -72,7 +72,8 @@ class EvidenceStatusResult:
     n_neutral: int
     rationale: str                     # Human-readable explanation of the verdict
     weighted_support: float = 0.0      # GRADE-weighted support score
-    weighted_contradiction: float = 0.0 # GRADE-weighted contradiction score
+    weighted_contradiction: float = 0.0 # GRADE-weighted true contradiction score
+    contextual_weight: float = 0.0      # GRADE-weighted contextual divergence score
     confidence_breakdown: Dict[str, float] = field(default_factory=dict) # Inspectable factor breakdown (FR-16.7)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -90,6 +91,7 @@ class EvidenceStatusResult:
             "n_neutral": self.n_neutral,
             "weighted_support": round(self.weighted_support, 2),
             "weighted_contradiction": round(self.weighted_contradiction, 2),
+            "contextual_weight": round(self.contextual_weight, 2),
             "confidence_breakdown": {k: round(v, 3) for k, v in self.confidence_breakdown.items()},
             "rationale": self.rationale,
         }
@@ -98,6 +100,26 @@ class EvidenceStatusResult:
 # ---------------------------------------------------------------------------
 # Status determination
 # ---------------------------------------------------------------------------
+
+def _distinct_study_ids(items: List[Any]) -> set:
+    """Extract set of unique study/paper identifiers from evidence items."""
+    studies = set()
+    for idx, it in enumerate(items):
+        if it is None:
+            studies.add(f"mock_study_{idx}")
+            continue
+        pid = None
+        if hasattr(it, "chunk") and it.chunk and getattr(it.chunk, "paper_id", None) and it.chunk.paper_id != "Not reported":
+            pid = it.chunk.paper_id
+        elif hasattr(it, "claim") and it.claim and getattr(it.claim, "paper_id", None) and it.claim.paper_id != "Not reported":
+            pid = it.claim.paper_id
+        if pid:
+            studies.add(pid)
+        else:
+            cid = getattr(it.chunk, "chunk_id", None) if hasattr(it, "chunk") else None
+            studies.add(cid or f"study_{idx}")
+    return studies
+
 
 def determine_evidence_status(
     summary: EvidenceRelationshipSummary,
@@ -145,24 +167,22 @@ def determine_evidence_status(
         return 1.0
 
     w_sup = sum(_item_weight(it) for it in summary.supporting)
-    w_con = sum(_item_weight(it) for it in summary.contradicting)
-    w_ctx = sum(_item_weight(it) * 0.5 for it in summary.contextual)
-    w_effective_con = w_con + w_ctx
-    w_decisive = w_sup + w_effective_con
+    true_contradiction_weight = sum(_item_weight(it) for it in summary.contradicting)
+    contextual_divergence_signal = sum(_item_weight(it) for it in summary.contextual)
 
-    # Raw ratios
-    effective_contradiction = n_con + (n_ctx * 0.5)
-    n_decisive = n_sup + effective_contradiction
+    # True contradictions and support form the decisive direct conflict axis
+    w_decisive = w_sup + true_contradiction_weight
+    n_decisive = n_sup + n_con
 
     total_entailment_ratio = n_sup / n_total if n_total > 0 else 0.0
-    total_contradiction_ratio = effective_contradiction / n_total if n_total > 0 else 0.0
+    total_contradiction_ratio = n_con / n_total if n_total > 0 else 0.0
     contextual_ratio = n_ctx / n_total if n_total > 0 else 0.0
 
     decisive_support_ratio = (n_sup / n_decisive) if n_decisive > 0 else 0.0
-    decisive_contradict_ratio = (effective_contradiction / n_decisive) if n_decisive > 0 else 0.0
+    decisive_contradict_ratio = (n_con / n_decisive) if n_decisive > 0 else 0.0
 
     w_support_ratio = (w_sup / w_decisive) if w_decisive > 0 else 0.0
-    w_contradict_ratio = (w_effective_con / w_decisive) if w_decisive > 0 else 0.0
+    w_contradict_ratio = (true_contradiction_weight / w_decisive) if w_decisive > 0 else 0.0
 
     entailment_ratio = decisive_support_ratio if n_decisive > 0 else total_entailment_ratio
     contradiction_ratio = decisive_contradict_ratio if n_decisive > 0 else total_contradiction_ratio
@@ -181,39 +201,59 @@ def determine_evidence_status(
         has_grade_assessments
         and w_sup >= 3.0
         and w_support_ratio >= 0.60
-        and (w_sup >= 1.5 * w_effective_con or n_con == 0)
+        and (w_sup >= 1.5 * true_contradiction_weight or n_con == 0)
     )
     is_refuted_grade = (
         has_grade_assessments
-        and w_effective_con >= 3.0
+        and true_contradiction_weight >= 3.0
         and w_contradict_ratio >= 0.60
-        and (w_effective_con >= 1.5 * w_sup or n_sup == 0)
+        and (true_contradiction_weight >= 1.5 * w_sup or n_sup == 0)
     )
 
     # 2. Count-based fallback check (when GRADE weights are tied or unassigned)
     is_supported_count = (
         (total_entailment_ratio >= min_support and total_contradiction_ratio < 0.2)
-        or (n_decisive >= 2 and n_sup >= 2 and decisive_support_ratio >= 0.7 and effective_contradiction < max(1.0, n_sup * 0.3))
+        or (n_decisive >= 2 and n_sup >= 2 and decisive_support_ratio >= 0.7 and n_con < max(1.0, n_sup * 0.3))
     )
     is_refuted_count = (
         (total_contradiction_ratio >= min_refute and total_entailment_ratio < 0.2)
-        or (n_decisive >= 2 and effective_contradiction >= 2 and decisive_contradict_ratio >= 0.7 and n_sup < max(1.0, effective_contradiction * 0.3))
+        or (n_decisive >= 2 and n_con >= 2 and decisive_contradict_ratio >= 0.7 and n_sup < max(1.0, n_con * 0.3))
     )
 
+    # Distinct study replication counts (FR-16.2 / FR-16.3 / FR-16.4)
+    distinct_sup_studies = _distinct_study_ids(summary.supporting)
+    distinct_con_studies = _distinct_study_ids(summary.contradicting)
+    n_distinct_sup = len(distinct_sup_studies)
+    n_distinct_con = len(distinct_con_studies)
+
     if is_supported_grade or (is_supported_count and not is_refuted_grade):
-        status = SUPPORTED
-        rationale = (
-            f"Evidence supports this claim with GRADE-weighted strength {w_sup:.1f} vs {w_effective_con:.1f} "
-            f"({w_support_ratio:.1%} weighted agreement across {n_sup} supporting items). "
-            f"Contradicting evidence is minimal ({n_con} contradictions, {n_ctx} contextual differences)."
-        )
+        if n_distinct_sup >= 2:
+            status = SUPPORTED
+            rationale = (
+                f"Evidence supports this claim with GRADE-weighted strength {w_sup:.1f} vs {true_contradiction_weight:.1f} "
+                f"({w_support_ratio:.1%} weighted agreement across {n_distinct_sup} independent studies, {n_sup} passages). "
+                f"Contradicting evidence is minimal ({n_con} true contradictions, {n_ctx} contextual differences)."
+            )
+        else:
+            status = INCONCLUSIVE
+            rationale = (
+                f"Insufficient study replication: only {n_distinct_sup} independent study retrieved ({n_sup} passages). "
+                f"SUPPORTED verdict requires multiple independent high-strength studies showing consistent entailment (FR-16.2)."
+            )
     elif is_refuted_grade or (is_refuted_count and not is_supported_grade):
-        status = REFUTED
-        rationale = (
-            f"Evidence contradicts this claim with GRADE-weighted strength {w_effective_con:.1f} vs {w_sup:.1f} "
-            f"({w_contradict_ratio:.1%} weighted disagreement across {n_con} contradicting items). "
-            f"Supporting evidence is minimal ({n_sup} supporting items)."
-        )
+        if n_distinct_con >= 2:
+            status = REFUTED
+            rationale = (
+                f"Evidence refutes this claim with GRADE-weighted contradiction {true_contradiction_weight:.1f} vs {w_sup:.1f} "
+                f"({w_contradict_ratio:.1%} contradiction across {n_distinct_con} independent studies, {n_con} passages). "
+                f"Supporting evidence is outweighed ({n_sup} supporting items, {n_ctx} contextual differences)."
+            )
+        else:
+            status = INCONCLUSIVE
+            rationale = (
+                f"Insufficient study replication: only {n_distinct_con} independent study retrieved ({n_con} passages). "
+                f"REFUTED verdict requires multiple independent high-strength studies showing consistent contradiction (FR-16.3)."
+            )
     else:
         status = INCONCLUSIVE
         if n_decisive == 0:
@@ -221,7 +261,7 @@ def determine_evidence_status(
                 f"All {n_neu} retrieved evidence pieces provided neutral background context without decisive "
                 f"support or contradiction. The evidence cannot be confidently classified as SUPPORTED or REFUTED."
             )
-        elif n_sup < 2 and effective_contradiction < 2 and w_decisive < 3.0:
+        elif n_sup < 2 and n_con < 2 and w_decisive < 3.0:
             rationale = (
                 f"Evidence is insufficient: only {n_sup} supporting and {n_con} contradicting pieces "
                 f"(GRADE strength: {w_decisive:.1f}). Minimum robust trial consensus required for verdict."
@@ -229,7 +269,7 @@ def determine_evidence_status(
         else:
             rationale = (
                 f"Evidence is mixed or conflicting: {n_sup} supporting (weight: {w_sup:.1f}) vs "
-                f"{n_con} contradicting (weight: {w_con:.1f}), with {n_ctx} contextual differences. "
+                f"{n_con} contradicting (weight: {true_contradiction_weight:.1f}), with {n_ctx} contextual differences. "
                 f"INCONCLUSIVE reflects genuine clinical controversy or population divergence."
             )
 
@@ -247,7 +287,8 @@ def determine_evidence_status(
 
     logger.info(
         f"Evidence status: {status} | Confidence: {confidence_label} ({confidence_score:.2f}) | "
-        f"GRADE weighted support: {w_sup:.1f}, contradiction: {w_effective_con:.1f}"
+        f"GRADE weighted support: {w_sup:.1f}, contradiction: {true_contradiction_weight:.1f}, "
+        f"contextual: {contextual_divergence_signal:.1f}"
     )
 
     return EvidenceStatusResult(
@@ -264,7 +305,8 @@ def determine_evidence_status(
         n_neutral=n_neu,
         rationale=rationale,
         weighted_support=round(w_sup, 2),
-        weighted_contradiction=round(w_effective_con, 2),
+        weighted_contradiction=round(true_contradiction_weight, 2),
+        contextual_weight=round(contextual_divergence_signal, 2),
         confidence_breakdown=breakdown,
     )
 
@@ -315,8 +357,17 @@ def _compute_confidence(
         avg_grade_norm = 0.5
 
     # 4. Number of independent studies (distinct paper_ids)
-    distinct_papers = len({it.chunk.paper_id for it in all_items if hasattr(it, "chunk") and it.chunk})
-    study_count_factor = min(1.0, 0.4 + (distinct_papers / 8.0))
+    # Evaluated from decisive evidence (supporting + contradicting, or contextual)
+    decisive_items = summary.supporting + summary.contradicting
+    if not decisive_items and summary.contextual:
+        decisive_items = summary.contextual
+    distinct_papers = len(_distinct_study_ids(decisive_items)) if decisive_items else 0
+    if distinct_papers <= 1:
+        study_count_factor = 0.25
+    elif distinct_papers == 2:
+        study_count_factor = 0.65
+    else:
+        study_count_factor = min(1.0, 0.65 + (distinct_papers - 2) * 0.08)
 
     # 5. Context match: high contextual conflict lowers overall claim confidence
     context_factor = 1.0 - (summary.n_contextual / max(1, n_total) * 0.5)

@@ -31,7 +31,7 @@
 from __future__ import annotations
 
 import re
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple, Set
 from dataclasses import dataclass, asdict, field
 
 from loguru import logger
@@ -142,6 +142,217 @@ def compare_claim_context(
     )
 
 
+_PLACEHOLDER_METADATA_VALUES = {
+    "", "not reported", "not specified", "unspecified", "none", "unknown",
+    "target intervention", "target outcome", "target population", "target comparator",
+    "unspecified endpoint", "general t2d care", "treatment",
+}
+
+
+def _is_missing_metadata(val: Optional[str]) -> bool:
+    """Check whether a field value represents missing or placeholder metadata."""
+    if val is None:
+        return True
+    return str(val).strip().lower() in _PLACEHOLDER_METADATA_VALUES
+
+
+def _clean_text(t: str) -> str:
+    """Normalize whitespace and lowercasing."""
+    return re.sub(r"\s+", " ", t.lower().strip())
+
+
+def _interventions_match(int_a: str, int_b: str, text_a: str = "", text_b: str = "") -> bool:
+    """
+    Generic biomedical intervention matching.
+    Handles exact names, drug stems, drug classes/members, lifestyle synonyms, and text containment.
+    """
+    if _is_missing_metadata(int_a) or _is_missing_metadata(int_b):
+        known = int_a if not _is_missing_metadata(int_a) else int_b
+        target_text = text_b if not _is_missing_metadata(int_a) else text_a
+        if known and target_text:
+            k_low = known.lower()
+            t_low = target_text.lower()
+            if re.search(r"\b" + re.escape(k_low) + r"\b", t_low):
+                return True
+            from src.claims.query_normalizer import DRUG_CLASSES, DRUG_BRAND_MAP
+            for class_id, info in DRUG_CLASSES.items():
+                all_terms = set(info["class_terms"] + info["members"])
+                for member in info["members"]:
+                    for brand in DRUG_BRAND_MAP.get(member, []):
+                        all_terms.add(brand)
+                if any(re.search(r"\b" + re.escape(term) + r"\b", k_low) for term in all_terms):
+                    if any(re.search(r"\b" + re.escape(term) + r"\b", t_low) for term in all_terms):
+                        return True
+            lifestyle_clusters = {
+                "aerobic_exercise": ["aerobic exercise", "aerobic training", "walking", "running", "cycling", "endurance training"],
+                "resistance_training": ["resistance training", "strength training", "weight training", "resistance exercise"],
+                "diet": ["diet", "dietary intervention", "nutrition", "caloric restriction", "mediterranean diet"],
+            }
+            for cluster_id, terms in lifestyle_clusters.items():
+                if any(t in k_low for t in terms):
+                    if any(re.search(r"\b" + re.escape(t) + r"\b", t_low) for t in terms):
+                        return True
+            general_exercise = ["exercise", "physical activity", "exercise/physical activity"]
+            if any(k_low == g or k_low.strip() == g for g in general_exercise):
+                all_ex = [t for terms in [lifestyle_clusters["aerobic_exercise"], lifestyle_clusters["resistance_training"]] for t in terms]
+                if any(re.search(r"\b" + re.escape(t) + r"\b", t_low) for t in all_ex):
+                    return True
+            return False
+        return True
+
+    a = _clean_text(int_a)
+    b = _clean_text(int_b)
+    if a == b:
+        return True
+
+    # Drug stem comparison
+    def _drug_stem(t: str) -> str:
+        s = re.sub(r"\b(monotherapy|combination|therapy|treatment|oral|tablets?|hydrochloride|daily|dose|inhibitors?|agonists?)\b", "", t)
+        return re.sub(r"\s+", " ", s).strip()
+
+    stem_a = _drug_stem(a)
+    stem_b = _drug_stem(b)
+    if stem_a and stem_b and (stem_a == stem_b or stem_a in stem_b or stem_b in stem_a):
+        return True
+
+    # Drug class to member matching
+    from src.claims.query_normalizer import DRUG_CLASSES, DRUG_BRAND_MAP
+    for class_id, info in DRUG_CLASSES.items():
+        all_terms = set(info["class_terms"] + info["members"])
+        for member in info["members"]:
+            for brand in DRUG_BRAND_MAP.get(member, []):
+                all_terms.add(brand)
+
+        a_matches = any(re.search(r"\b" + re.escape(term) + r"\b", a) for term in all_terms)
+        b_matches = any(re.search(r"\b" + re.escape(term) + r"\b", b) for term in all_terms)
+        if a_matches and b_matches:
+            return True
+
+    # Lifestyle interventions matching
+    lifestyle_clusters = {
+        "aerobic_exercise": ["aerobic exercise", "aerobic training", "walking", "running", "cycling", "endurance training"],
+        "resistance_training": ["resistance training", "strength training", "weight training", "resistance exercise"],
+        "diet": ["diet", "dietary intervention", "nutrition", "caloric restriction", "mediterranean diet"],
+    }
+    for cluster_id, terms in lifestyle_clusters.items():
+        a_in_cluster = any(t in a for t in terms)
+        b_in_cluster = any(t in b for t in terms)
+        if a_in_cluster and b_in_cluster:
+            return True
+
+    # General exercise match: only standalone "exercise" or "physical activity" matches specific exercise types
+    general_exercise = ["exercise", "physical activity", "exercise/physical activity"]
+    if any(a == g or a.strip() == g for g in general_exercise) and any(t in b for terms in [lifestyle_clusters["aerobic_exercise"], lifestyle_clusters["resistance_training"]] for t in terms):
+        return True
+    if any(b == g or b.strip() == g for g in general_exercise) and any(t in a for terms in [lifestyle_clusters["aerobic_exercise"], lifestyle_clusters["resistance_training"]] for t in terms):
+        return True
+
+    # Text containment fallback
+    if (text_b and re.search(r"\b" + re.escape(a) + r"\b", text_b.lower())) or \
+       (text_a and re.search(r"\b" + re.escape(b) + r"\b", text_a.lower())):
+        return True
+
+    return False
+
+
+def _outcomes_match(out_a: str, out_b: str, text_a: str = "", text_b: str = "") -> bool:
+    """
+    Generic biomedical outcome matching.
+    Handles exact names, clinical synonym clusters, substrings, and word overlap.
+    """
+    if _is_missing_metadata(out_a) or _is_missing_metadata(out_b):
+        return True
+
+    a = _clean_text(out_a)
+    b = _clean_text(out_b)
+    if a == b:
+        return True
+
+    from src.claims.query_normalizer import OUTCOME_SYNONYM_CLUSTERS
+    for cluster_id, synonyms in OUTCOME_SYNONYM_CLUSTERS.items():
+        a_in_cluster = any(s == a or s in a or a in s for s in synonyms)
+        b_in_cluster = any(s in b or b in s for s in synonyms)
+        if a_in_cluster and b_in_cluster:
+            return True
+
+    # Cross-cluster clinical equivalence: CV mortality matches mortality and cv_events
+    cv_mortality_terms = ["cardiovascular mortality", "cardiovascular death", "cv death", "fatal cv events"]
+    if any(t in a for t in cv_mortality_terms) and any(s in b for s in OUTCOME_SYNONYM_CLUSTERS.get("mortality", [])):
+        return True
+    if any(t in b for t in cv_mortality_terms) and any(s in a for s in OUTCOME_SYNONYM_CLUSTERS.get("mortality", [])):
+        return True
+
+    # Substring match
+    if a in b or b in a:
+        return True
+
+    # Text containment fallback
+    if (text_b and re.search(r"\b" + re.escape(a) + r"\b", text_b.lower())) or \
+       (text_a and re.search(r"\b" + re.escape(b) + r"\b", text_a.lower())):
+        return True
+
+    # Significant biomedical token overlap
+    words_a = set(re.findall(r"\b[a-z]{4,}\b", a))
+    words_b = set(re.findall(r"\b[a-z]{4,}\b", b))
+    overlap = words_a & words_b - {"events", "event", "risk", "level", "levels", "control", "status"}
+    if overlap:
+        return True
+
+    return False
+
+
+def _populations_compatible(pop_a: str, pop_b: str) -> Tuple[bool, Optional[str]]:
+    """
+    Determine whether two populations are clinically compatible.
+    Returns (True, None) if compatible, or (False, reason) if mutually exclusive/divergent.
+    """
+    diff = _compare_population(pop_a, pop_b, "")
+    if diff:
+        return False, diff.description
+    return True, None
+
+
+def _normalize_direction(direction_str: Optional[str], text: str = "") -> str:
+    """Normalize effect direction to 'REDUCTION', 'INCREASE', 'NO_CHANGE', or 'UNCLEAR'."""
+    d = (direction_str or "").strip().lower()
+    if d in ("reduction", "decrease", "lower", "loss", "decline", "drop", "prevent", "lessen", "fall"):
+        return "REDUCTION"
+    if d in ("increase", "elevation", "elevate", "raise", "higher", "gain", "rise", "grow", "accrue"):
+        return "INCREASE"
+    if d in ("no change", "neutral", "similar", "unchanged", "no difference", "not significant"):
+        return "NO_CHANGE"
+
+    # Fallback to inspecting text
+    t = text.lower()
+    if any(re.search(r"\b" + re.escape(w) + r"\b", t) for w in [
+        "reduce", "reduces", "reduced", "reducing", "reduction",
+        "decrease", "decreases", "decreased", "decreasing",
+        "lower", "lowers", "lowered", "lowering",
+        "prevent", "prevents", "prevention"
+    ]):
+        return "REDUCTION"
+    if any(re.search(r"\b" + re.escape(w) + r"\b", t) for w in [
+        "increase", "increases", "increased", "increasing",
+        "elevate", "elevates", "elevated", "elevating",
+        "raise", "raises", "raised", "raising"
+    ]):
+        return "INCREASE"
+    if any(re.search(r"\b" + re.escape(w) + r"\b", t) for w in ["no difference", "no significant difference", "did not differ"]):
+        return "NO_CHANGE"
+
+    return "UNCLEAR"
+
+
+def _is_opposite_direction(dir_a: str, dir_b: str) -> bool:
+    """Check if two directions represent direct opposite clinical effects."""
+    return (dir_a == "REDUCTION" and dir_b == "INCREASE") or (dir_a == "INCREASE" and dir_b == "REDUCTION")
+
+
+def _is_matching_direction(dir_a: str, dir_b: str) -> bool:
+    """Check if two directions represent matching clinical effects."""
+    return (dir_a == "REDUCTION" and dir_b == "REDUCTION") or (dir_a == "INCREASE" and dir_b == "INCREASE")
+
+
 def _compare_dimension(
     dimension: str,
     val_a: str,
@@ -149,69 +360,210 @@ def _compare_dimension(
     base_description: str,
 ) -> Optional[ContextualDifference]:
     """
-    Compare a single contextual dimension between two claims.
+    Compare a single contextual dimension between two claims per FR-14.2/FR-14.4.
 
-    Returns a ContextualDifference if a meaningful difference is detected,
-    or None if the values are too similar or both are "Not reported".
+    Returns a ContextualDifference if an actual, material clinical difference
+    is detected, or None if the values are comparable or missing.
+    Missing metadata in one or both claims does NOT constitute a contextual difference.
     """
-    # If both are missing, no useful comparison
-    if val_a == "Not reported" and val_b == "Not reported":
+    if _is_missing_metadata(val_a) or _is_missing_metadata(val_b):
         return None
 
-    # If one is missing, note it
-    if val_a == "Not reported" or val_b == "Not reported":
-        known = val_b if val_a == "Not reported" else val_a
-        return ContextualDifference(
-            dimension=dimension,
-            claim_a_value=val_a,
-            claim_b_value=val_b,
-            description=(
-                f"One study does not report {dimension} "
-                f"(the other reports: '{known}')"
-            ),
-        )
+    # Compare based on specific dimension semantics
+    if dimension == "population":
+        return _compare_population(val_a, val_b, base_description)
+    elif dimension == "intervention":
+        return _compare_intervention(val_a, val_b, base_description)
+    elif dimension == "comparator":
+        return _compare_comparator(val_a, val_b, base_description)
+    elif dimension == "outcome":
+        return _compare_outcome(val_a, val_b, base_description)
+    elif dimension == "duration":
+        return _compare_duration(val_a, val_b, base_description)
+    elif dimension == "study_context":
+        return None
 
-    # Check for meaningful difference
-    if _texts_meaningfully_differ(val_a, val_b):
+    return None
+
+
+def _compare_population(val_a: str, val_b: str, base_desc: str) -> Optional[ContextualDifference]:
+    """Compare patient populations for explicit, named subgroup divergences."""
+    if _is_missing_metadata(val_a) or _is_missing_metadata(val_b):
+        return None
+
+    a = _clean_text(val_a)
+    b = _clean_text(val_b)
+    if a == b:
+        return None
+
+    # Check 1: Explicit clinical subgroup polarity / negation (e.g. obese vs non-obese, with vs without)
+    polarity_contrasts = [
+        (["non-obese", "non obese", "normal weight", "lean", "bmi < 25", "without obesity"],
+         ["obese", "obesity", "overweight", "bmi >= 30", "bmi > 30"]),
+        (["without ckd", "without kidney disease", "without renal impairment", "normal renal function", "preserved egfr"],
+         ["with ckd", "chronic kidney disease", "renal impairment", "nephropathy", "esrd", "dialysis", "egfr < 30", "egfr < 60"]),
+        (["without heart failure", "no heart failure", "without hf"],
+         ["heart failure", "hfref", "hfpef", "congestive heart failure", "with heart failure"]),
+        (["without cvd", "primary prevention", "no prior cv", "low cv risk"],
+         ["established cvd", "secondary prevention", "prior mi", "coronary artery disease", "cad", "ascvd"]),
+        (["pediatric", "children", "adolescents", "youth", "< 18"],
+         ["adult", "adults", "elderly", "older adults", ">= 65"]),
+        (["type 1 diabetes", "t1d", "t1dm"],
+         ["type 2 diabetes", "t2d", "t2dm"]),
+        (["gestational diabetes", "gdm"],
+         ["type 2 diabetes", "t2d", "t2dm"]),
+    ]
+
+    for group1, group2 in polarity_contrasts:
+        a_in_g1 = any(term in a for term in group1)
+        b_in_g1 = any(term in b for term in group1)
+        a_in_g2 = any(term in a for term in group2)
+        b_in_g2 = any(term in b for term in group2)
+
+        if (a_in_g1 and b_in_g2) or (a_in_g2 and b_in_g1):
+            return ContextualDifference(
+                dimension="population",
+                claim_a_value=val_a,
+                claim_b_value=val_b,
+                description=f"Studies examined divergent patient cohorts: '{val_a}' vs '{val_b}'",
+            )
+
+    # Check 2: Explicit comorbidity restriction vs general T2D
+    restricted_subgroups = [
+        "esrd", "dialysis", "egfr < 30", "severe renal impairment",
+        "heart failure with reduced ejection fraction", "hfref",
+        "pediatric", "children", "pregnancy", "gestational",
+    ]
+    for sub in restricted_subgroups:
+        a_has_sub = sub in a
+        b_has_sub = sub in b
+        if a_has_sub != b_has_sub:
+            restricted_val = val_a if a_has_sub else val_b
+            general_val = val_b if a_has_sub else val_a
+            return ContextualDifference(
+                dimension="population",
+                claim_a_value=val_a,
+                claim_b_value=val_b,
+                description=f"Evidence population restricted to '{restricted_val}' subgroup vs general cohort '{general_val}'",
+            )
+
+    return None
+
+
+def _compare_intervention(val_a: str, val_b: str, base_desc: str) -> Optional[ContextualDifference]:
+    """Compare interventions for material drug mismatch."""
+    if _is_missing_metadata(val_a) or _is_missing_metadata(val_b):
+        return None
+
+    if _interventions_match(val_a, val_b):
+        return None
+
+    return ContextualDifference(
+        dimension="intervention",
+        claim_a_value=val_a,
+        claim_b_value=val_b,
+        description=f"Studies examined different interventions: '{val_a}' vs '{val_b}'",
+    )
+
+
+def _compare_comparator(val_a: str, val_b: str, base_desc: str) -> Optional[ContextualDifference]:
+    """Compare control/comparator for placebo vs active comparator differences."""
+    if _is_missing_metadata(val_a) or _is_missing_metadata(val_b):
+        return None
+
+    a = _clean_text(val_a)
+    b = _clean_text(val_b)
+    if a == b:
+        return None
+
+    placebo_terms = ["placebo", "standard care", "usual care", "control", "standard of care"]
+    a_is_placebo = any(p in a for p in placebo_terms)
+    b_is_placebo = any(p in b for p in placebo_terms)
+
+    if a_is_placebo != b_is_placebo:
         return ContextualDifference(
-            dimension=dimension,
+            dimension="comparator",
             claim_a_value=val_a,
             claim_b_value=val_b,
-            description=f"{base_description}: '{val_a}' vs '{val_b}'",
+            description=f"Studies used different comparators: '{val_a}' vs '{val_b}'",
         )
 
     return None
 
 
-def _texts_meaningfully_differ(a: str, b: str) -> bool:
-    """
-    Check if two text values are meaningfully different.
+def _compare_outcome(val_a: str, val_b: str, base_desc: str) -> Optional[ContextualDifference]:
+    """Compare outcomes for surrogate biomarker vs hard clinical endpoint divergence."""
+    if _is_missing_metadata(val_a) or _is_missing_metadata(val_b):
+        return None
 
-    Checks:
-    1. Exact match (case-insensitive)
-    2. Explicit clinical negation/subgroup divergence (e.g., 'obese' vs 'non-obese', 'with' vs 'without')
-    3. Jaccard word similarity threshold (<0.6 treated as different)
-    """
-    a_str = a.lower().strip()
-    b_str = b.lower().strip()
-    if a_str == b_str:
-        return False
+    if _outcomes_match(val_a, val_b):
+        return None
 
-    # Check for explicit clinical subgroup polarity
-    negation_prefixes = ["non-", "non ", "not ", "without ", "no "]
-    a_neg = any(neg in a_str for neg in negation_prefixes)
-    b_neg = any(neg in b_str for neg in negation_prefixes)
-    if a_neg != b_neg:
-        return True
+    a = _clean_text(val_a)
+    b = _clean_text(val_b)
 
-    words_a = set(re.findall(r"\b\w+\b", a_str))
-    words_b = set(re.findall(r"\b\w+\b", b_str))
-    if not words_a or not words_b:
-        return True
-    overlap = len(words_a & words_b)
-    max_len = max(len(words_a), len(words_b))
-    similarity = overlap / max_len
-    return similarity < 0.6
+    # Surrogate glycemic endpoints vs hard clinical endpoints
+    surrogates = ["hba1c", "blood glucose", "glycemic control", "fpg", "postprandial glucose"]
+    hard_endpoints = ["mortality", "death", "myocardial infarction", "stroke", "heart failure hospitalization", "mace", "heart failure"]
+
+    a_is_surrogate = any(s in a for s in surrogates)
+    b_is_surrogate = any(s in b for s in surrogates)
+    a_is_hard = any(h in a for h in hard_endpoints)
+    b_is_hard = any(h in b for h in hard_endpoints)
+
+    if (a_is_surrogate and b_is_hard) or (a_is_hard and b_is_surrogate):
+        return ContextualDifference(
+            dimension="outcome",
+            claim_a_value=val_a,
+            claim_b_value=val_b,
+            description=f"Studies measured different outcome tiers: surrogate endpoint ({val_a}) vs clinical endpoint ({val_b})",
+        )
+
+    # Both are within same broad outcome domain (e.g. CV mortality vs mortality vs MACE)
+    if (a_is_hard and b_is_hard) or (a_is_surrogate and b_is_surrogate):
+        return None
+
+    # Check word overlap
+    words_a = set(re.findall(r"\b\w{3,}\b", a))
+    words_b = set(re.findall(r"\b\w{3,}\b", b))
+    if words_a & words_b:
+        return None
+
+    return ContextualDifference(
+        dimension="outcome",
+        claim_a_value=val_a,
+        claim_b_value=val_b,
+        description=f"Studies measured different outcomes: '{val_a}' vs '{val_b}'",
+    )
+
+
+def _compare_duration(val_a: str, val_b: str, base_desc: str) -> Optional[ContextualDifference]:
+    """Compare duration for acute vs chronic study design divergence."""
+    if _is_missing_metadata(val_a) or _is_missing_metadata(val_b):
+        return None
+
+    a = _clean_text(val_a)
+    b = _clean_text(val_b)
+    if a == b:
+        return None
+
+    acute_terms = ["acute", "hours", "days", "single dose", "in-hospital", "1 week", "2 weeks"]
+    chronic_terms = ["years", "long-term", "52 weeks", "104 weeks", "multi-year", "5 years"]
+
+    a_acute = any(t in a for t in acute_terms)
+    b_acute = any(t in b for t in acute_terms)
+    a_chronic = any(t in a for t in chronic_terms)
+    b_chronic = any(t in b for t in chronic_terms)
+
+    if (a_acute and b_chronic) or (a_chronic and b_acute):
+        return ContextualDifference(
+            dimension="duration",
+            claim_a_value=val_a,
+            claim_b_value=val_b,
+            description=f"Studies differed in timeframe: acute ({val_a}) vs chronic/long-term ({val_b})",
+        )
+
+    return None
 
 
 def _classify_conflict(
@@ -220,27 +572,52 @@ def _classify_conflict(
     claim_b: StructuredClaim,
 ) -> str:
     """
-    Classify the type of conflict based on identified differences.
+    Classify the type of conflict based on identified differences per FR-14.3/FR-14.4 and General Polarity Rule.
 
-    CONTEXTUAL: Meaningful differences in population, intervention, outcome, or duration
-    SEMANTIC: Contradictory claims with very similar context
-    UNRESOLVED: Insufficient information to classify
+    GENERAL RULE:
+    If:
+      - intervention matches,
+      - outcome matches,
+      - population is compatible,
+      - and evidence effect direction is opposite to query hypothesis (or claims assert opposite directions)
+    then:
+      → SEMANTIC (True Contradiction)
+
+    If population is divergent (e.g. pediatric vs adult), or intervention/outcome is divergent:
+      → CONTEXTUAL
     """
-    if not differences:
-        # No contextual differences detected — claims appear to be in similar context
-        if (claim_a.intervention != "Not reported" and
-                claim_b.intervention != "Not reported"):
-            return "SEMANTIC"
-        return "UNRESOLVED"
-
-    # Key dimensions that suggest contextual rather than semantic conflict
-    key_contextual_dims = {"population", "intervention", "outcome", "duration"}
-    contextual_dims_found = {d.dimension for d in differences}
-
-    if key_contextual_dims & contextual_dims_found:
+    # 1. Check for explicit population divergence (e.g. pediatric vs adult)
+    pop_compatible, _ = _populations_compatible(claim_a.population, claim_b.population)
+    if not pop_compatible:
         return "CONTEXTUAL"
 
-    return "UNRESOLVED"
+    # 2. Check for explicit intervention divergence
+    if not _interventions_match(claim_a.intervention, claim_b.intervention, claim_a.raw_text, claim_b.raw_text):
+        return "CONTEXTUAL"
+
+    # 3. Check for explicit outcome tier divergence
+    if not _outcomes_match(claim_a.outcome, claim_b.outcome, claim_a.raw_text, claim_b.raw_text):
+        return "CONTEXTUAL"
+
+    # 4. Check directions
+    dir_a = _normalize_direction(claim_a.direction, claim_a.raw_text)
+    dir_b = _normalize_direction(claim_b.direction, claim_b.raw_text)
+
+    # If intervention matches, outcome matches, population is compatible,
+    # and directions are opposite -> SEMANTIC (True Contradiction)
+    if _is_opposite_direction(dir_a, dir_b):
+        return "SEMANTIC"
+
+    # If differences contain an explicit population, intervention, or outcome difference:
+    major_diffs = [
+        d for d in differences
+        if d.dimension in ("population", "intervention", "outcome")
+    ]
+    if major_diffs:
+        return "CONTEXTUAL"
+
+    # Default to SEMANTIC when PICO context aligns
+    return "SEMANTIC"
 
 
 def _generate_summary(

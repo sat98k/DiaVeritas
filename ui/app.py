@@ -282,11 +282,6 @@ def render_clinical_synthesis(result):
     """Render the primary synthesized clinical answer and evidence panels."""
     # Synthesized Answer Card
     st.markdown('<div class="section-heading">Clinical Evidence Synthesis</div>', unsafe_allow_html=True)
-    
-    if getattr(result, "ungrounded_claims", None):
-        st.warning(
-            f"⚠️ **Citation Grounding Notice:** {len(result.ungrounded_claims)} sentence(s) in the draft lacked direct passage citation and were flagged for clinical review."
-        )
 
     if result.answer:
         st.markdown(f"""
